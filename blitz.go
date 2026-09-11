@@ -1,34 +1,18 @@
 // Package blitz renders HTML, markdown and web pages to images using the Blitz
 // engine (https://github.com/dioxuslabs/blitz), linked as a static archive.
 //
-// Build the archives before using this package:
-//
-//	./build-blitz.sh
+// The archives are prebuilt and come from a companion module per platform,
+// under github.com/xo/blitz/libblitz/. Each is pulled in by a build-tagged
+// blank import in link_GOOS_GOARCH.go, so `go build` downloads only the one
+// for the platform being built and the link flags live next to the archives
+// they describe. There is no build step; ./build-blitz.sh is for regenerating
+// the archives themselves, not for consuming this package.
 //
 // All exported operations are safe for concurrent use by multiple goroutines.
 package blitz
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/libblitz
-
-// libblitz.a for this target is past GitHub's 100 MiB file limit, so it is
-// committed as numbered pieces instead (see build-blitz.sh). --start-group is
-// needed because the pieces refer to each other's symbols in both directions,
-// and GNU ld otherwise gives up after one left-to-right pass.
-#cgo linux,amd64   LDFLAGS: -L${SRCDIR}/libblitz/linux-amd64 -Wl,--start-group -lblitz0 -lblitz1 -Wl,--end-group -lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm
-#cgo linux,arm64   LDFLAGS: -L${SRCDIR}/libblitz/linux-arm64 -Wl,--start-group -lblitz0 -lblitz1 -Wl,--end-group -lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm
-#cgo linux,arm     LDFLAGS: -L${SRCDIR}/libblitz/linux-armv7 -Wl,--start-group -lblitz0 -lblitz1 -Wl,--end-group -lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm
-// The macOS archives are under the limit, so they are single files. Foundation
-// and -lobjc are not optional: fontique calls NSSearchPathForDirectoriesInDomains
-// to find the font directories. fontconfig, CoreGraphics, SystemConfiguration
-// and libc++ are absent because nothing in the archive refers to them — check
-// with `llvm-nm --undefined-only` before adding any of them back.
-#cgo darwin,amd64  LDFLAGS: -L${SRCDIR}/libblitz/macos-amd64 -lblitz -framework Security -framework CoreFoundation -framework Foundation -framework CoreText -lobjc -liconv -lm
-#cgo darwin,arm64  LDFLAGS: -L${SRCDIR}/libblitz/macos-arm64 -lblitz -framework Security -framework CoreFoundation -framework Foundation -framework CoreText -lobjc -liconv -lm
-// Wider than native-static-libs.txt reports for this target, deliberately:
-// rustc omits dwrite and friends, but the archive calls DWriteCreateFactory and
-// ~50 other DirectWrite/GDI/OLE entry points.
-#cgo windows,amd64 LDFLAGS: -L${SRCDIR}/libblitz/windows-amd64 -lblitz -lws2_32 -lbcrypt -lcrypt32 -lsecur32 -lncrypt -lntdll -luserenv -lkernel32 -ldbghelp -lole32 -loleaut32 -ldwrite -lgdi32 -lusp10 -lshell32 -ladvapi32 -luuid -lmsvcrt -lpthread
 
 #include <stdlib.h>
 #include <string.h>

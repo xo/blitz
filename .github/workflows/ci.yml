@@ -78,6 +78,46 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Check the generated files are current
+        if: runner.os == 'Linux'
+        shell: bash
+        # lib.go, doc.go and link_*.go are written by build-blitz.sh from the
+        # SYSTEM_LIBS / GO_BUILD_TAG tables and from how many pieces each
+        # archive was split into. Editing one by hand, or changing the tables
+        # without regenerating, would silently ship the wrong link flags.
+        run: make check-generated
+
+      - name: Check no module is over the go command's size cap
+        if: runner.os == 'Linux'
+        shell: bash
+        # golang.org/x/mod/zip.MaxZipFile: the go command refuses a module whose
+        # zip OR extracted content exceeds 500 MiB. The archives are split into
+        # one module per platform to stay under it; this fails the build if a
+        # rebuild ever pushes one back over. Files in a nested module do not
+        # count towards the parent, which is why each is measured on its own.
+        run: |
+          status=0
+          cap=$((500 * 1024 * 1024))
+          for d in . libblitz/*/; do
+            # Root module: everything tracked except the nested modules.
+            if [ "$d" = "." ]; then
+              bytes=$(git ls-files -z \
+                | grep -zv '^libblitz/[^/]*/' \
+                | xargs -0 -r stat -c %s \
+                | awk '{s+=$1} END {print s+0}')
+            else
+              bytes=$(git ls-files -z -- "$d" \
+                | xargs -0 -r stat -c %s \
+                | awk '{s+=$1} END {print s+0}')
+            fi
+            printf '%-28s %8.1f MiB\n' "$d" "$(echo "$bytes" | awk '{print $1/1048576}')"
+            if [ "$bytes" -ge "$cap" ]; then
+              echo "::error::$d is over the 500 MiB module limit"
+              status=1
+            fi
+          done
+          exit $status
+
       # -race is not optional here. The package pins goroutines to OS threads to
       # keep the library's thread-local error slot coherent, and guards the
       # context pointer against a concurrent Close. Both are exactly the kind of

@@ -9,6 +9,8 @@
 #   ./build-blitz.sh --rev a1b2c3d      # pin a commit instead of the latest tag
 #   ./build-blitz.sh --local ../blitz-c # build from a working copy
 #   ./build-blitz.sh --engine docker    # override the container engine
+#   ./build-blitz.sh --slim-only        # strip dead weight from committed archives
+#   ./build-blitz.sh --modules-only     # regenerate libblitz/*/go.mod and lib.go
 #
 # Every target is built with `cross` under podman, including the Apple targets,
 # which use locally built cross-toolchain images. There is no native build path:
@@ -37,6 +39,10 @@ WORK="${BLITZ_WORK:-$HOME/src/blitz}"
 OUT="libblitz"
 PROFILE="${BLITZ_PROFILE:-release}"
 JOBS_FLAG=""
+# --modules-only and --slim-only work on the archives already in libblitz/,
+# with no container and no Rust toolchain involved.
+MODULES_ONLY=0
+SLIM_ONLY=0
 
 # cross reads this; podman unless overridden.
 export CROSS_CONTAINER_ENGINE="${CROSS_CONTAINER_ENGINE:-podman}"
@@ -70,6 +76,61 @@ declare -A GO_PLATFORM=(
     [windows-amd64]="windows,amd64"
 )
 
+# //go:build constraint for each target, used in the generated lib.go.
+declare -A GO_BUILD_TAG=(
+    [linux-amd64]="linux && amd64"
+    [linux-arm64]="linux && arm64"
+    [linux-armv7]="linux && arm"
+    [macos-amd64]="darwin && amd64"
+    [macos-arm64]="darwin && arm64"
+    [windows-amd64]="windows && amd64"
+)
+
+# GOOS_GOARCH for each target, naming the root module's link_*.go files.
+declare -A GO_FILE_SUFFIX=(
+    [linux-amd64]=linux_amd64
+    [linux-arm64]=linux_arm64
+    [linux-armv7]=linux_arm
+    [macos-amd64]=darwin_amd64
+    [macos-arm64]=darwin_arm64
+    [windows-amd64]=windows_amd64
+)
+
+# System libraries each target needs on top of the blitz archives, emitted into
+# the generated lib.go. These are NOT just a copy of native-static-libs.txt:
+# rustc's list is incomplete on Windows and over-broad on macOS, so it is a
+# starting point for comparison rather than an answer. See the notes below
+# before editing any of them.
+declare -A SYSTEM_LIBS=(
+    [linux-amd64]="-lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm"
+    [linux-arm64]="-lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm"
+    [linux-armv7]="-lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm"
+    # Foundation and -lobjc are not optional: fontique calls
+    # NSSearchPathForDirectoriesInDomains to find the font directories.
+    # fontconfig, CoreGraphics, SystemConfiguration and libc++ are absent
+    # because nothing in the archive refers to them — check with
+    # `llvm-nm --undefined-only` before adding any of them back.
+    [macos-amd64]="-framework Security -framework CoreFoundation -framework Foundation -framework CoreText -lobjc -liconv -lm"
+    [macos-arm64]="-framework Security -framework CoreFoundation -framework Foundation -framework CoreText -lobjc -liconv -lm"
+    # Wider than native-static-libs.txt reports, deliberately: rustc omits
+    # dwrite and friends, but the archive calls DWriteCreateFactory and ~50
+    # other DirectWrite/GDI/OLE entry points.
+    [windows-amd64]="-lws2_32 -lbcrypt -lcrypt32 -lsecur32 -lncrypt -lntdll -luserenv -lkernel32 -ldbghelp -lole32 -loleaut32 -ldwrite -lgdi32 -lusp10 -lshell32 -ladvapi32 -luuid -lmsvcrt -lpthread"
+)
+
+# Each target ships as its own Go module nested under libblitz/, so a consumer
+# downloads only the archives for the platform it is building for. The root
+# module's 648 MiB tree is past the 500 MiB cap the go command puts on a module
+# (golang.org/x/mod/zip.MaxZipFile, applied to the extracted content as well as
+# the zip), and even under it, one module means every consumer pays for all six
+# targets. Directories holding a go.mod are excluded from the parent module's
+# zip, so this also keeps the root module small.
+MODULE_PREFIX="github.com/xo/blitz/libblitz"
+# The `go` directive for the generated modules. Deliberately lower than the root
+# module's: these packages are a cgo directive and nothing else, so there is no
+# reason to make them demand a recent toolchain.
+MODULE_GO_DIRECTIVE="1.21"
+
 # GitHub refuses any file over 100 MiB, and libblitz.a for the 64-bit Linux
 # targets is past that, so an archive that size has to be committed in pieces.
 MAX_ARCHIVE_BYTES=$((100 * 1024 * 1024))
@@ -92,6 +153,8 @@ while [[ $# -gt 0 ]]; do
         --repo)    REPO="${2:?--repo needs a value}"; shift 2 ;;
         --local)   LOCAL_SRC="${2:?--local needs a path}"; shift 2 ;;
         --profile) PROFILE="${2:?--profile needs a value}"; shift 2 ;;
+        --modules-only) MODULES_ONLY=1; shift ;;
+        --slim-only)    SLIM_ONLY=1; shift ;;
         --jobs|-j) JOBS_FLAG="--jobs ${2:?--jobs needs a value}"; shift 2 ;;
         --engine)  export CROSS_CONTAINER_ENGINE="${2:?--engine needs a value}"; shift 2 ;;
         -h|--help) usage 0 ;;
@@ -108,8 +171,10 @@ for t in "${selected[@]}"; do
     [[ -n "${TARGETS[$t]:-}" ]] || die "unknown target '$t' (valid: ${ALL_TARGETS[*]})"
 done
 
-command -v git   >/dev/null 2>&1 || die "git is required"
-command -v cross >/dev/null 2>&1 || die "cross is required (cargo install cross)"
+command -v git >/dev/null 2>&1 || die "git is required"
+if [[ "$MODULES_ONLY" -eq 0 && "$SLIM_ONLY" -eq 0 ]]; then
+    command -v cross >/dev/null 2>&1 || die "cross is required (cargo install cross)"
+fi
 
 # --- source ------------------------------------------------------------------
 
@@ -163,6 +228,80 @@ fetch_source() {
 
 file_size() { wc -c < "$1" | tr -d '[:space:]'; }
 
+# Drops what the consumer's link will never use from $1/libblitz.a, in place.
+#
+# Two things ride along in a rustc staticlib and neither survives contact with
+# cgo's linker:
+#
+#   .llvmbc / .llvmcmd   LLVM bitcode. Cargo already builds this crate's own
+#                        deps with -Cembed-bitcode=no, but the std, core and
+#                        alloc objects come out of rustup's precompiled rlibs,
+#                        which carry it. Nothing here is ever LTO'd by the Go
+#                        build, so it is pure freight.
+#   debug info           std ships with it and the release profile's
+#                        `strip = "none"` keeps it. A consumer debugging their
+#                        own Go code has no use for Rust std line tables.
+#
+# Worth ~13% on linux-amd64 (129.9 -> 112.2 MiB), verified to still link and
+# pass the test suite. Note this is NOT the same as switching to the
+# `production` profile in blitz-c: `lto = true` there forces embed-bitcode back
+# on, and because rustc defers LTO for a staticlib to whoever links it, the
+# archive comes out *larger* (195.7 MiB).
+#
+# Symbols are left alone — --strip-debug, never --strip-unneeded. The archive
+# is nothing but symbols as far as the linker is concerned.
+slim_archive() {
+    local archive="$1" before after members bad attempts
+
+    command -v llvm-objcopy >/dev/null 2>&1 || {
+        warn "llvm-objcopy not found; shipping $archive unslimmed"
+        return 0
+    }
+
+    before="$(file_size "$archive")"
+    members="$(llvm-ar t "$archive" | wc -l)"
+
+    # llvm-objcopy rewrites an archive in place, member by member. Doing it this
+    # way rather than extract / process / repack matters for two reasons:
+    #
+    #   - The Windows archive has ~40 duplicate member names (mingw import
+    #     stubs, several .o with the same basename). Extraction flattens
+    #     everything into one directory, so duplicates would overwrite each
+    #     other and silently drop objects.
+    #   - Member order and the symbol table are preserved for free.
+    #
+    # The only thing it refuses is a member that is not an object file at all.
+    # Shipped libblitz0.a archives have exactly one, the stray `.parts` scratch
+    # file from the split bug; drop whatever it names and retry rather than
+    # giving up on the whole archive.
+    attempts=0
+    while (( attempts < 8 )); do
+        # `|| true` because a refused member is the expected path here, and
+        # pipefail would otherwise make set -e kill the script mid-slim.
+        bad="$(llvm-objcopy --remove-section=.llvmbc --remove-section=.llvmcmd \
+                   --strip-debug "$archive" 2>&1 \
+               | sed -n "s/.*'[^']*(\(.*\))': The file was not recognized.*/\1/p" \
+               | head -1 || true)"
+
+        if [[ -z "$bad" ]]; then
+            break
+        fi
+
+        warn "$(basename "$archive"): member '$bad' is not an object file, dropping it"
+        llvm-ar d "$archive" "$bad"
+        attempts=$(( attempts + 1 ))
+    done
+
+    if (( attempts >= 8 )); then
+        warn "$(basename "$archive"): gave up slimming after $attempts bad members"
+        return 0
+    fi
+
+    after="$(file_size "$archive")"
+    info "slimmed $(basename "$archive"): $((before / 1024 / 1024)) -> $((after / 1024 / 1024)) MiB, $members -> $(llvm-ar t "$archive" | wc -l) members"
+}
+
+
 # Splits $1/libblitz.a into $1/libblitz0.a, libblitz1.a, ... and removes the
 # original. Sets SPLIT_PARTS to the number of pieces.
 #
@@ -190,6 +329,14 @@ split_archive() {
     work="$(mktemp -d)"
     ( cd "$work" && llvm-ar x "$archive" )
 
+    # The plan lives OUTSIDE $work. Writing it inside raced with the `find`
+    # below: a pipeline starts every stage at once, so the shell created the
+    # file for awk's redirection while find was still walking the directory,
+    # and find picked it up as a zero-byte member. Every shipped libblitz0.a
+    # has a bogus `.parts` member because of it, which breaks llvm-strip and
+    # llvm-objcopy on the whole archive.
+    plan="$(mktemp)"
+
     # Pack members into the fewest parts the budget allows, then even them out,
     # so no single part sits just under the cap while another is nearly empty.
     find "$work" -maxdepth 1 -type f -printf '%s %f\n' \
@@ -207,9 +354,9 @@ split_archive() {
                     acc += size[i]
                     print part, name[i]
                 }
-            }' > "$work/.parts"
+            }' > "$plan"
 
-    parts="$(awk '{ if ($1 + 1 > m) m = $1 + 1 } END { print m + 0 }' "$work/.parts")"
+    parts="$(awk '{ if ($1 + 1 > m) m = $1 + 1 } END { print m + 0 }' "$plan")"
     [[ "$parts" -ge 1 ]] || die "$archive: could not work out how to split it"
 
     for (( i = 0; i < parts; i++ )); do
@@ -217,12 +364,12 @@ split_archive() {
         # Through xargs because the member list runs to thousands of objects;
         # `q` appends, so the repeated invocations it may make are fine, and `s`
         # rewrites the symbol table each time.
-        awk -v p="$i" '$1 == p { print $2 }' "$work/.parts" \
+        awk -v p="$i" '$1 == p { print $2 }' "$plan" \
           | ( cd "$work" && xargs llvm-ar qcs "$dest/libblitz$i.a" )
     done
 
     rm -f "$archive"
-    rm -rf "$work"
+    rm -rf "$work" "$plan"
 
     local part size
     for (( i = 0; i < parts; i++ )); do
@@ -261,29 +408,85 @@ archive_ldflags() {
     esac
 }
 
-# blitz.go names the archives by hand, so a change in the number of parts has to
-# be reflected there or consumers get an undefined-symbol wall. Check rather
-# than trusting it.
+# Writes the Go module that ships this target's archives: go.mod, an untagged
+# doc.go so the package always builds, and lib.go carrying the #cgo LDFLAGS.
 #
-# Only the archive flags are checked, not the system libraries. Those need
-# judgement that this script has no business making: rustc's list is incomplete
-# on Windows (it omits dwrite, which the archive definitely calls) and carries
-# entries macOS does not need, so it is a starting point rather than an answer.
-# native-static-libs.txt records it for exactly that comparison.
-check_cgo_directive() {
-    local target="$1" parts="$2" platform expected line
-    platform="${GO_PLATFORM[$target]}"
-    expected="$(archive_ldflags "$target" "$parts")"
+# Generated rather than hand-written, because the flags depend on how many
+# pieces the archive was split into. blitz.go used to name the archives by hand
+# and this script could only warn when the two disagreed; now there is one
+# source of truth and nothing to keep in sync.
+write_module() {
+    # Split across statements on purpose: `local` expands all of its arguments
+    # before assigning any of them, so referring to $target in the same `local`
+    # that declares it trips set -u.
+    local target="$1" parts="$2"
+    local dest="$OUT/$target"
+    local tag="${GO_BUILD_TAG[$target]}" libs="${SYSTEM_LIBS[$target]}"
+    local ldflags
 
-    line="$(grep -E "^#cgo +${platform}[[:space:]]+LDFLAGS:" blitz.go 2>/dev/null || true)"
+    ldflags="$(archive_ldflags "$target" "$parts") $libs"
 
-    if [[ -n "$line" && "$line" == *"$expected"* ]]; then
-        return
-    fi
+    cat > "$dest/go.mod" <<EOF
+module $MODULE_PREFIX/$target
 
-    warn "$target: blitz.go does not name the archives just built. It needs:"
-    printf '    #cgo %s LDFLAGS: -L${SRCDIR}/%s/%s %s <system libs>\n' \
-        "$platform" "$OUT" "$target" "$expected" >&2
+go $MODULE_GO_DIRECTIVE
+EOF
+
+    cat > "$dest/doc.go" <<EOF
+// Package lib ships the prebuilt Blitz static archives for $target and the
+// cgo link flags that go with them. It has no API: import it for its side
+// effect on the link, which is what github.com/xo/blitz does.
+//
+// Code generated by build-blitz.sh. DO NOT EDIT.
+package lib
+EOF
+
+    # The build constraint keeps the #cgo line out of every other platform's
+    # build. doc.go above carries no constraint, so the package still resolves
+    # when something imports it on a platform it does not cover, instead of
+    # failing with "build constraints exclude all Go files".
+    cat > "$dest/lib.go" <<EOF
+// Code generated by build-blitz.sh. DO NOT EDIT.
+
+//go:build $tag
+
+package lib
+
+/*
+#cgo LDFLAGS: -L\${SRCDIR} $ldflags
+*/
+import "C"
+EOF
+
+    info "$target: wrote go.mod, doc.go, lib.go"
+}
+
+# Writes the root module's link_GOOS_GOARCH.go files: one build-tagged blank
+# import per target. Always writes all of them, not just the selected targets —
+# the root package has to compile everywhere, whichever archives were rebuilt.
+write_link_files() {
+    local target file tag
+
+    for target in "${ALL_TARGETS[@]}"; do
+        file="link_${GO_FILE_SUFFIX[$target]}.go"
+        tag="${GO_BUILD_TAG[$target]}"
+
+        cat > "$file" <<EOF
+// Code generated by build-blitz.sh. DO NOT EDIT.
+
+//go:build $tag
+
+package blitz
+
+// Blank import for the link only: the package has no API, it just carries the
+// $target archives and the #cgo LDFLAGS naming them. Because this file is
+// build-tagged, the go command never downloads the other five platforms'
+// modules when building for this one.
+import _ "$MODULE_PREFIX/$target"
+EOF
+    done
+
+    info "wrote link_*.go for ${#ALL_TARGETS[@]} targets"
 }
 
 # --- build -------------------------------------------------------------------
@@ -321,6 +524,10 @@ build_target() {
     # cargo marks the archive executable and it propagates into git.
     chmod -x "$dest/libblitz.a"
 
+    # Before the size check below, so a target only gets split if it is still
+    # over the limit once the dead weight is gone.
+    slim_archive "$dest/libblitz.a"
+
     # Anything over the limit has to be committed as several archives, since
     # GitHub will reject the push otherwise.
     rm -f "$dest"/libblitz[0-9].a
@@ -346,7 +553,7 @@ build_target() {
         warn "$target: could not capture native-static-libs"
     fi
 
-    check_cgo_directive "$target" "$SPLIT_PARTS"
+    write_module "$target" "$SPLIT_PARTS"
 }
 
 # "libblitz.a (130M)" or "libblitz0.a (65M) libblitz1.a (65M)".
@@ -360,6 +567,42 @@ target_archives() {
 }
 
 # --- main --------------------------------------------------------------------
+
+# Both of these work on what is already committed, so neither needs a source
+# checkout or a container.
+if [[ "$MODULES_ONLY" -eq 1 || "$SLIM_ONLY" -eq 1 ]]; then
+    for t in "${selected[@]}"; do
+        dest="$OUT/$t"
+        [[ -d "$dest" ]] || die "$dest does not exist; build it first"
+
+        if [[ "$SLIM_ONLY" -eq 1 ]]; then
+            for a in "$dest"/libblitz.a "$dest"/libblitz[0-9].a; do
+                if [[ -f "$a" ]]; then
+                    slim_archive "$a"
+                fi
+            done
+        fi
+
+        if [[ "$MODULES_ONLY" -eq 1 ]]; then
+            # Derive the piece count from what is on disk rather than rebuilding
+            # to find out: 0 means a single libblitz.a.
+            # Plain assignment, not (( parts++ )) — post-increment evaluates to
+            # the old value, so the first one would return 1 and trip set -e.
+            parts=0
+            for a in "$dest"/libblitz[0-9].a; do
+                if [[ -f "$a" ]]; then
+                    parts=$(( parts + 1 ))
+                fi
+            done
+            write_module "$t" "$parts"
+        fi
+    done
+    if [[ "$MODULES_ONLY" -eq 1 ]]; then
+        write_link_files
+    fi
+    info "done"
+    exit 0
+fi
 
 info "container engine: $CROSS_CONTAINER_ENGINE"
 
@@ -378,6 +621,8 @@ info "header -> $OUT/blitz.h"
 for t in "${selected[@]}"; do
     build_target "$t"
 done
+
+write_link_files
 
 info "done"
 printf '\nbuilt archives:\n'
