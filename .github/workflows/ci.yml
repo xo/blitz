@@ -27,6 +27,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-amd64
+          # GitHub-hosted ARM64 Linux runner: free for public repositories, and
+          # on the paid plans for private ones. This is the only job that links
+          # the linux-arm64 archives, which are split into libblitz0.a /
+          # libblitz1.a exactly like linux-amd64 — so it also covers the
+          # --start-group flags for a second target.
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-latest
             target: macos-arm64   # macos-latest runners are Apple silicon
           - os: windows-latest
@@ -79,7 +86,7 @@ jobs:
         run: go vet ./...
 
       - name: Check the generated files are current
-        if: runner.os == 'Linux'
+        if: matrix.target == 'linux-amd64'
         shell: bash
         # lib.go, doc.go and link_*.go are written by build-blitz.sh from the
         # SYSTEM_LIBS / GO_BUILD_TAG tables and from how many pieces each
@@ -88,7 +95,7 @@ jobs:
         run: make check-generated
 
       - name: Check no module is over the go command's size cap
-        if: runner.os == 'Linux'
+        if: matrix.target == 'linux-amd64'
         shell: bash
         # golang.org/x/mod/zip.MaxZipFile: the go command refuses a module whose
         # zip OR extracted content exceeds 500 MiB. The archives are split into
