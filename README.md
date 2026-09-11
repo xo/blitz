@@ -1,0 +1,224 @@
+# blitz
+
+Go bindings for [Blitz](https://github.com/dioxuslabs/blitz), a native HTML/CSS
+renderer. Renders web pages, HTML and markdown to images, headlessly — no
+browser, no window, no GPU.
+
+Wraps the C ABI from [xo/blitz-c](https://github.com/xo/blitz-c), linked as a
+static archive.
+
+```go
+ctx, err := blitz.New(0)
+if err != nil {
+    log.Fatal(err)
+}
+defer ctx.Close()
+
+opts := blitz.DefaultOptions()
+opts.Width = 1200
+opts.Scale = 2
+
+png, err := ctx.RenderURLPNG("https://example.com", opts, 144)
+```
+
+## Install
+
+```bash
+go get github.com/xo/blitz
+```
+
+Nothing else. The static archives for all six platforms are committed under
+`libblitz/`, so cgo links against the one matching your `GOOS`/`GOARCH` with no
+build step — which is required, since a module consumer never runs any script
+from this repository.
+
+You only need the rest of this section if you're *updating* the archives.
+
+## Rebuilding the archives
+
+```bash
+./build-blitz.sh                      # every target
+./build-blitz.sh linux-amd64
+./build-blitz.sh linux-arm64 windows-amd64
+./build-blitz.sh --rev a1b2c3d        # pin a commit instead of the latest tag
+./build-blitz.sh --local ../blitz-c   # build from a working copy
+```
+
+The first build compiles Stylo, parley and the TLS stack from source, so expect
+it to take a while.
+
+When bumping `blitz-c`, rebuild and commit **all six targets in one commit**
+along with `version.txt`. Each archive is tens of megabytes and git stores every
+version forever, so partial updates cost repository size without producing a
+usable release.
+
+### How the cross builds work
+
+Every target goes through [`cross`](https://github.com/cross-rs/cross) with
+podman — there is no native build path, so an archive can't differ depending on
+which machine produced it. `CROSS_CONTAINER_ENGINE` defaults to `podman`;
+`--engine docker` or exporting the variable overrides it.
+
+That means builds happen on a Linux host with a container engine. macOS and
+Windows can't produce these archives, which is a further reason the results are
+committed rather than built on demand.
+
+The Apple targets use locally built cross-toolchain images
+(`ghcr.io/cross-rs/x86_64-apple-darwin-cross:local` and the arm64 equivalent);
+build those once with `cross-toolchains` if you don't have them.
+
+`libblitz.a` is a static archive of Rust code that still links system libraries
+dynamically — on Linux that's OpenSSL (`-lssl -lcrypto`, via reqwest) and
+`-lfontconfig`. A cross build therefore needs those for the *target*
+architecture, so `Cross.toml` carries `pre-build` hooks that install
+`libssl-dev:$CROSS_DEB_ARCH` and `libfontconfig1-dev:$CROSS_DEB_ARCH` into the
+containers, plus cmake for aws-lc-rs and nasm for the Windows target. The script
+copies it into the checkout, where cross looks for it.
+
+The source is checked out to `$WORKDIR` (default `~/src/blitz`) at the latest
+tag, or the default branch if the repo isn't tagged yet. The resolved version is
+written to `version.txt`, which is committed — it's the only record of what the
+archives were built from.
+
+Link flags are captured during the build itself, via
+`CARGO_TARGET_<TRIPLE>_RUSTFLAGS=--print=native-static-libs`, and written to
+`libblitz/<target>/native-static-libs.txt`. They come from the same compilation
+that produced the archive rather than a second invocation that could disagree
+with it.
+
+## Layout
+
+```
+blitz.go                 the package
+blitz_test.go            tests; writes PNGs to testdata/output/
+build-blitz.sh           builds libblitz.a for each target (cross + podman)
+Cross.toml               images and target-arch deps for the cross builds
+version.txt              which blitz-c tag/rev the archives came from
+cmd/blitz-render/        example CLI
+libblitz/                prebuilt archives, committed
+  blitz.h
+  linux-amd64/libblitz.a
+  macos-arm64/libblitz.a
+  ...
+```
+
+The directory names under `libblitz/` are referenced by the `#cgo` directives in
+`blitz.go`, so they're part of the interface. See `libblitz/README.md` for why
+the archives are committed rather than fetched or built on demand.
+
+## Concurrency
+
+Everything exported is safe to use from multiple goroutines. Two details make
+that true, and both are easy to get wrong:
+
+**Goroutines are pinned for the duration of a call.** The library reports errors
+through a *thread-local* slot read by `blitz_last_error_message`. A cgo call
+keeps a goroutine on one OS thread for its own duration, but nothing stops the
+scheduler from moving it between the render call and the error read — which
+would return another thread's error, or none at all. Every entry point wraps the
+pair in `runtime.LockOSThread`. `TestConcurrentErrorsAreNotCrossed` covers this.
+
+**`Close` waits for in-flight renders.** The context pointer is guarded by an
+`sync.RWMutex`: renders take the read lock, `Close` takes the write lock. Without
+it, closing while a render is running is a use-after-free — an occasional
+segfault in production, and something `-race` catches immediately.
+`TestCloseDuringRender` covers this.
+
+Note that concurrent renders *queue* rather than run in parallel. The library
+serialises them internally, because Stylo keeps process-global style state. For
+real parallelism, run multiple processes.
+
+Create one `Context` and share it. Creating one spins up worker threads, so
+per-request contexts are expensive.
+
+## Rendering markdown
+
+```go
+opts := blitz.DefaultOptions()
+opts.EnableNet = false // self-contained document
+
+png, err := ctx.RenderMarkdownPNG(string(source), "", opts, 144)
+```
+
+GFM tables, footnotes, strikethrough and task lists are on. The built-in
+stylesheet honours `prefers-color-scheme`, so `opts.ColorScheme = blitz.Dark`
+gives a dark render with no CSS changes.
+
+To extend the stylesheet rather than replace it:
+
+```go
+css := blitz.DefaultMarkdownStylesheet() + "\nbody { padding: 64px; }"
+img, err := ctx.RenderMarkdownStyled(source, "", css, opts)
+```
+
+`RenderMarkdownStyled` with an empty `css` string renders unstyled — that's
+distinct from `RenderMarkdown`, which uses the built-in sheet. The three states
+(built-in / none / custom) are why the stylesheet is a separate method rather
+than an `Options` field.
+
+Relative image paths in markdown need both a `baseURL` (a directory `file://`
+URL) *and* `EnableNet = true`, since assets go through the net provider even for
+local documents.
+
+## Fonts
+
+The renderer resolves fonts through the host system. A container with no fonts
+installed produces blank pages and still returns success — which is why the
+tests assert a minimum PNG size rather than just checking the error. Install
+`fontconfig` and at least one font family (`fonts-dejavu-core` is enough) in any
+image that runs this.
+
+## CLI
+
+```bash
+make render
+./bin/blitz-render https://example.com
+./bin/blitz-render README.md -o readme.png -w 900
+./bin/blitz-render page.html -dark -transparent
+```
+
+## Testing
+
+```bash
+make test        # -race, hermetic
+make test-net    # adds the google.com render
+make bench
+```
+
+Tests write to `testdata/output/` so the renders can be looked at afterwards.
+Network tests are behind a `-network` flag: a test that fails on a train is a
+test people learn to ignore.
+
+## Updating
+
+`build-blitz.sh` checks out the latest tag of `xo/blitz-c`, falling back to the
+default branch while the repo is untagged. To pin:
+
+```bash
+./build-blitz.sh --rev a1b2c3d
+BLITZ_WORK=/tmp/scratch ./build-blitz.sh linux-amd64
+```
+
+If a build starts failing with undefined symbols after an update, the system
+libraries changed. Compare `libblitz/<target>/native-static-libs.txt` — written
+on every build — against the `LDFLAGS` for that platform in `blitz.go`.
+
+The directory keys in the `TARGETS` map in `build-blitz.sh` are the directory
+names under `libblitz/`, and `blitz.go` references them by hand. They use the
+`linux-amd64` / `macos-arm64` spelling from the `#cgo` block rather than Go's
+`GOOS_GOARCH`; if you'd rather match the resvg convention, change the map keys
+and the six `#cgo` lines together.
+
+## Platform notes
+
+The Windows archive is built for `x86_64-pc-windows-gnu`, not `-msvc`. cgo links
+with mingw gcc, and an MSVC-produced `.lib` doesn't combine with it cleanly. The
+gnu target also names its output `libblitz.a`, so `-lblitz` works unchanged
+across all platforms.
+
+`aws-lc-rs` (the TLS crypto provider) assembles its primitives and needs NASM on
+Windows.
+
+## License
+
+The bindings are MIT. Blitz itself is MIT OR Apache-2.0.

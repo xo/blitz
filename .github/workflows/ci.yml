@@ -1,0 +1,293 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CGO_ENABLED: "1"
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    # Nothing is compiled from Rust here — the archive is committed, so this is
+    # a cgo link plus the Go tests.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+          - os: macos-latest
+            target: macos-arm64   # macos-latest runners are Apple silicon
+          - os: windows-latest
+            target: windows-amd64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: false # nothing to cache; the module has no dependencies
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          # OpenSSL and fontconfig are linked dynamically by libblitz.a, so the
+          # dev packages are needed at link time. The fonts matter at run time:
+          # without them the renderer produces blank pages and still succeeds.
+          sudo apt-get install -y --no-install-recommends \
+            libssl-dev libfontconfig1-dev \
+            fonts-liberation fonts-dejavu-core
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install fontconfig
+
+      - name: Check for a mingw gcc
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # cgo needs one, and an MSVC-only image would otherwise fail much later
+        # with a confusing error.
+        run: gcc --version
+
+      - name: Check the committed archive is present
+        shell: bash
+        # Testing against the committed archive is the point: it's the exact
+        # artifact a `go get` consumer links. There's no fallback build here —
+        # every target is produced by cross on a Linux host with podman, which
+        # these runners are not.
+        run: |
+          archive="libblitz/${{ matrix.target }}/libblitz.a"
+          if [ ! -f "$archive" ]; then
+            echo "::error::$archive is missing. Run ./build-blitz.sh locally and commit it."
+            exit 1
+          fi
+          ls -lh "$archive"
+          [ -f libblitz/blitz.h ] || { echo "::error::libblitz/blitz.h is missing"; exit 1; }
+
+      - name: Show the link flags this archive expects
+        shell: bash
+        # Recorded per target by build-blitz.sh. If cgo later fails with
+        # undefined symbols, this is the list blitz.go should agree with.
+        run: |
+          for f in libblitz/*/native-static-libs.txt; do
+            echo "$f:"; sed 's/^/  /' "$f"
+          done
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on: $unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      # -race is not optional here. The package pins goroutines to OS threads to
+      # keep the library's thread-local error slot coherent, and guards the
+      # context pointer against a concurrent Close. Both are exactly the kind of
+      # bug that only the race detector catches.
+      - name: go test -race
+        run: go test -race -v ./...
+
+      - name: Build the example command
+        run: go build -o bin/blitz-render ./cmd/blitz-render
+
+      - name: Render through the CLI
+        shell: bash
+        run: |
+          ./bin/blitz-render -no-net -w 900 -o cli-markdown.png testdata/sample.md
+          ./bin/blitz-render -no-net -w 900 -o cli-html.png testdata/sample.html
+          ls -l cli-*.png
+
+      - name: Check the renders are not blank
+        shell: bash
+        # Size is the cheapest proxy for "fonts actually resolved". A missing
+        # font stack produces a valid, nearly empty PNG.
+        run: |
+          for f in cli-markdown.png cli-html.png testdata/output/*.png; do
+            [ -f "$f" ] || continue
+            size=$(wc -c < "$f")
+            echo "$f: $size bytes"
+            if [ "$size" -lt 2048 ]; then
+              echo "::error::$f is suspiciously small — missing fonts?"
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: renders-${{ matrix.os }}
+          path: |
+            cli-*.png
+            testdata/output/*.png
+          if-no-files-found: warn
+          retention-days: 7
+
+  network:
+    name: live render (google.com)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Depends on an external site that can rate-limit or redirect datacenter
+    # IPs. Informative, not a gate — the matrix above is the gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libssl-dev libfontconfig1-dev \
+            fonts-liberation fonts-dejavu-core
+
+      - run: test -f libblitz/linux-amd64/libblitz.a
+      - run: go test -race -v -network -run 'URL' ./...
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-renders
+          path: testdata/output/*.png
+          if-no-files-found: warn
+
+  cross:
+    name: cross-build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Verifies the archives for the other Linux architectures still build. They
+    # can't be tested here — there's no runner to execute them on — so this only
+    # proves they link, which is the failure mode that actually happens.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-arm64, linux-armv7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross --locked
+      - name: Build
+        # podman is preinstalled on ubuntu runners. Locally this defaults to
+        # podman too; CROSS_CONTAINER_ENGINE overrides it either way.
+        env:
+          CROSS_CONTAINER_ENGINE: podman
+        run: ./build-blitz.sh ${{ matrix.target }}
+      - name: Confirm the archive is for the right architecture
+        run: |
+          file libblitz/${{ matrix.target }}/libblitz.a | head -1
+          cat libblitz/${{ matrix.target }}/native-static-libs.txt
+
+  archives:
+    name: committed archives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: All six targets present
+        shell: bash
+        # A target carries either libblitz.a or, when that would be over
+        # GitHub's file limit, the libblitz0.a, libblitz1.a, ... pieces
+        # build-blitz.sh splits it into.
+        run: |
+          missing=0
+          for t in linux-amd64 linux-arm64 linux-armv7 \
+                   macos-amd64 macos-arm64 windows-amd64; do
+            found=$(ls libblitz/$t/libblitz.a libblitz/$t/libblitz[0-9].a 2>/dev/null || true)
+            if [ -n "$found" ]; then
+              printf '%-16s %s\n' "$t" "$(du -ch $found | tail -1 | cut -f1) in $(echo "$found" | wc -l) file(s)"
+            else
+              echo "::error::no libblitz archive in libblitz/$t/"
+              missing=1
+            fi
+          done
+          test -f libblitz/blitz.h || { echo "::error::missing libblitz/blitz.h"; missing=1; }
+          test -f version.txt || echo "::warning::no version.txt recording the blitz-c revision"
+          exit $missing
+
+      - name: No file over GitHub's 100 MiB limit
+        shell: bash
+        # GitHub rejects the push outright, so catching it here is the only way
+        # to find out before the archives are unpushable. Splitting is
+        # build-blitz.sh's job; this is the guard that it happened.
+        run: |
+          oversized=$(find . -path ./.git -prune -o -type f -size +100M -print)
+          if [ -n "$oversized" ]; then
+            echo "::error::over the 100 MiB file limit: $oversized"
+            ls -lh $oversized
+            exit 1
+          fi
+          echo "largest committed files:"
+          find . -path ./.git -prune -o -type f -printf '%s %p\n' \
+            | sort -rn | head -5 \
+            | awk '{ printf "  %6.1f MiB  %s\n", $1/1048576, $2 }'
+
+      - name: Each archive is for the architecture it claims
+        shell: bash
+        # A copy/paste slip in build-blitz.sh puts the wrong binary in the right
+        # directory, which then fails at link time for downstream users only.
+        #
+        # `file` on the archive itself only ever says "current ar archive" — it
+        # reports the container, not the target — so the first object member has
+        # to be extracted and identified instead. Each pattern pins the object
+        # format as well as the architecture, so a Mach-O x86_64 archive can't
+        # satisfy the ELF x86-64 target.
+        run: |
+          set -euo pipefail
+          check() {
+            local target="$1" want="$2" archive dir members member got
+            # Whole archive, or the first piece if it had to be split.
+            archive="$PWD/libblitz/$target/libblitz.a"
+            [ -f "$archive" ] || archive="$PWD/libblitz/$target/libblitz0.a"
+            # Not `ar t | head -1`: head closes the pipe early, ar takes SIGPIPE
+            # and pipefail turns that into a spurious 141.
+            members=$(ar t "$archive")
+            member=${members%%$'\n'*}
+            if [ -z "$member" ]; then
+              echo "::error::$target: ar could not list any member of $archive"
+              exit 1
+            fi
+            dir=$(mktemp -d)
+            ( cd "$dir" && ar x "$archive" "$member" )
+            got=$(file -b "$dir/$member")
+            rm -rf "$dir"
+            printf '%-16s %s\n' "$target" "$got"
+            case "$got" in
+              $want) ;;
+              *) echo "::error::$target: expected $want, got $got"; exit 1 ;;
+            esac
+          }
+          check linux-amd64   '*ELF*x86-64*'
+          check linux-arm64   '*ELF*aarch64*'
+          check linux-armv7   '*ELF*EABI*'
+          check macos-amd64   '*Mach-O*x86_64*'
+          check macos-arm64   '*Mach-O*arm64*'
+          check windows-amd64 '*COFF*amd64*'
+
+      - name: Archives are not executable
+        run: |
+          bad=$(find libblitz -name '*.a' -perm -u+x -print)
+          if [ -n "$bad" ]; then
+            echo "::error::executable bit set on: $bad (build-blitz.sh should chmod -x)"
+            exit 1
+          fi

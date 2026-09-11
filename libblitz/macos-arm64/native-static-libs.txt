@@ -1,0 +1,1 @@
+-framework Security -framework CoreFoundation -framework Foundation -lobjc -framework Foundation -framework CoreText -framework CoreFoundation -liconv -lSystem -lc -lm

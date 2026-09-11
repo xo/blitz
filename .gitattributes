@@ -1,0 +1,10 @@
+# Static archives are binary. Git usually detects this, but being explicit stops
+# any core.autocrlf or text=auto setting from touching them on a Windows
+# checkout, which would silently corrupt the archive.
+*.a binary -diff -merge
+libblitz/** linguist-vendored
+
+# Keep the header and flag files as normal text with LF endings.
+*.h text eol=lf
+native-static-libs.txt text eol=lf
+*.sh text eol=lf

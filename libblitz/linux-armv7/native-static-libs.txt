@@ -1,0 +1,1 @@
+-lfontconfig -lfreetype -ldl -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc

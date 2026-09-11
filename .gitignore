@@ -1,0 +1,26 @@
+# NOTE: libblitz/ is deliberately NOT ignored. The archives have to be committed
+# or `go get github.com/xo/blitz` cannot link — a consumer fetching the module
+# gets exactly what's in the repository and never runs build-blitz.sh.
+
+# Build logs from build-blitz.sh are noisy and machine-specific; the archives,
+# the header and native-static-libs.txt beside them are all committed.
+/libblitz/*/build.log
+
+# Rendered test output
+/testdata/output/
+
+# Built binaries
+/bin/
+/blitz-render
+
+# Go
+*.test
+*.out
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+/*.png
