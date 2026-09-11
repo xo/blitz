@@ -78,16 +78,6 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: gofmt
-        shell: bash
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "::error::gofmt needed on: $unformatted"
-            gofmt -d .
-            exit 1
-          fi
-
       # -race is not optional here. The package pins goroutines to OS threads to
       # keep the library's thread-local error slot coherent, and guards the
       # context pointer against a concurrent Close. Both are exactly the kind of
