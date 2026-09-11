@@ -18,8 +18,6 @@ jobs:
   test:
     name: test / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    # Nothing is compiled from Rust here — the archive is committed, so this is
-    # a cgo link plus the Go tests.
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -27,12 +25,9 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-amd64
-          # GitHub-hosted ARM64 Linux runner: free for public repositories, and
-          # on the paid plans for private ones. This is the only job that links
-          # the linux-arm64 archives, which are split into libblitz0.a /
-          # libblitz1.a exactly like linux-amd64 — so it also covers the
-          # --start-group flags for a second target.
-          - os: ubuntu-24.04-arm
+          # Not ubuntu-22.04-arm: the Linux archives need glibc >= 2.38.
+          # See "Linux needs glibc 2.38 or newer" in README.md.
+          - os: ubuntu-26.04-arm
             target: linux-arm64
           - os: macos-latest
             target: macos-arm64   # macos-latest runners are Apple silicon
@@ -45,16 +40,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache: false # nothing to cache; the module has no dependencies
+          cache: false
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
+        # The fonts are a runtime dependency: without them the renderer produces
+        # blank pages and still reports success.
         run: |
           sudo apt-get update
-          # fontconfig (and freetype under it) is linked dynamically by the
-          # archives, so the dev package is needed at link time. The fonts
-          # matter at run time: without them the renderer produces blank pages
-          # and still reports success.
           sudo apt-get install -y --no-install-recommends \
             libfontconfig1-dev \
             fonts-liberation fonts-dejavu-core
@@ -66,15 +59,10 @@ jobs:
       - name: Check for a mingw gcc
         if: runner.os == 'Windows'
         shell: pwsh
-        # cgo needs one, and an MSVC-only image would otherwise fail much later
-        # with a confusing error.
         run: gcc --version
 
       - name: Show the link flags the archives expect
         shell: bash
-        # Recorded per target by build-blitz.sh. If the cgo link below fails with
-        # undefined symbols, this is the list blitz.go should agree with.
-        # Diagnostics only — never a gate, hence the `|| true`.
         continue-on-error: true
         run: |
           for f in libblitz/*/native-static-libs.txt; do
@@ -88,25 +76,18 @@ jobs:
       - name: Check the generated files are current
         if: matrix.target == 'linux-amd64'
         shell: bash
-        # lib.go, doc.go and link_*.go are written by build-blitz.sh from the
-        # SYSTEM_LIBS / GO_BUILD_TAG tables and from how many pieces each
-        # archive was split into. Editing one by hand, or changing the tables
-        # without regenerating, would silently ship the wrong link flags.
         run: make check-generated
 
       - name: Check no module is over the go command's size cap
         if: matrix.target == 'linux-amd64'
         shell: bash
         # golang.org/x/mod/zip.MaxZipFile: the go command refuses a module whose
-        # zip OR extracted content exceeds 500 MiB. The archives are split into
-        # one module per platform to stay under it; this fails the build if a
-        # rebuild ever pushes one back over. Files in a nested module do not
-        # count towards the parent, which is why each is measured on its own.
+        # zip OR extracted content exceeds 500 MiB. Files in a nested module do
+        # not count towards the parent, so each is measured on its own.
         run: |
           status=0
           cap=$((500 * 1024 * 1024))
           for d in . libblitz/*/; do
-            # Root module: everything tracked except the nested modules.
             if [ "$d" = "." ]; then
               bytes=$(git ls-files -z \
                 | grep -zv '^libblitz/[^/]*/' \
@@ -125,10 +106,9 @@ jobs:
           done
           exit $status
 
-      # -race is not optional here. The package pins goroutines to OS threads to
-      # keep the library's thread-local error slot coherent, and guards the
-      # context pointer against a concurrent Close. Both are exactly the kind of
-      # bug that only the race detector catches.
+      # -race is not optional: the package pins goroutines to OS threads for the
+      # library's thread-local error slot, and guards the context pointer
+      # against a concurrent Close.
       - name: go test -race
         run: go test -race -v ./...
 
@@ -144,7 +124,7 @@ jobs:
 
       - name: Check the renders are not blank
         shell: bash
-        # Size is the cheapest proxy for "fonts actually resolved". A missing
+        # Size is the cheapest proxy for "fonts actually resolved": a missing
         # font stack produces a valid, nearly empty PNG.
         run: |
           for f in cli-markdown.png cli-html.png testdata/output/*.png; do
@@ -171,8 +151,8 @@ jobs:
     name: live render (google.com)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Depends on an external site that can rate-limit or redirect datacenter
-    # IPs. Informative, not a gate — the matrix above is the gate.
+    # Depends on an external site that can rate-limit datacenter IPs.
+    # Informative, not a gate.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -198,18 +178,13 @@ jobs:
   hygiene:
     name: committed file sizes + permissions
     runs-on: ubuntu-latest
-    # Whether the archives exist and link is settled by `go build` in the test
-    # matrix above, so nothing here inspects them. These are the two things a
-    # build cannot tell you: that the files can be pushed at all, and that they
-    # didn't arrive with cargo's executable bit still set.
     steps:
       - uses: actions/checkout@v4
 
       - name: No file over GitHub's 100 MiB limit
         shell: bash
-        # GitHub rejects the push outright, so catching it here is the only way
-        # to find out before the archives are unpushable. Splitting is
-        # build-blitz.sh's job; this is the guard that it happened.
+        # GitHub rejects the push outright, so this is the only way to find out
+        # before the archives are unpushable.
         run: |
           oversized=$(find . -path ./.git -prune -o -type f -size +100M -print)
           if [ -n "$oversized" ]; then

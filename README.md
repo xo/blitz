@@ -237,6 +237,33 @@ across all platforms.
 `aws-lc-rs` (the TLS crypto provider) assembles its primitives and needs NASM on
 Windows.
 
+### Linux needs glibc 2.38 or newer
+
+All three Linux archives have undefined references to `__isoc23_sscanf` and
+`__isoc23_strtol` (armv7 only the latter). Those are the C23 conversion symbols
+glibc introduced in **2.38**, pulled in by the `aws-lc` C sources — so linking
+against an older glibc fails at the cgo step with:
+
+```
+undefined reference to `__isoc23_sscanf'
+```
+
+Verified by linking on Debian 12 (glibc 2.36), which fails, and Ubuntu 24.04
+(glibc 2.39), which works.
+
+| distribution | glibc | links |
+|---|---|---|
+| Ubuntu 24.04, Debian 13 | 2.39 / 2.41 | yes |
+| Debian 12 | 2.36 | no |
+| Ubuntu 22.04 | 2.35 | no |
+| RHEL 9, Amazon Linux 2023 | 2.34 | no |
+
+This is a property of how the archives were built, not something a consumer can
+work around, and it is almost certainly not intended — `cross` exists to pin an
+*old* glibc for exactly this reason. Fixing it means building the Linux targets
+in an older base image and rebuilding; the floor then drops to whatever that
+image ships.
+
 ## License
 
 The bindings are MIT. Blitz itself is MIT OR Apache-2.0.
