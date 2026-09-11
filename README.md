@@ -248,11 +248,12 @@ against an older glibc fails at the cgo step with:
 undefined reference to `__isoc23_sscanf'
 ```
 
-Verified by linking on Debian 12 (glibc 2.36), which fails, and Ubuntu 24.04
-(glibc 2.39), which works.
+Verified on aarch64 by linking and rendering under Debian 12 (glibc 2.36),
+which fails, and Ubuntu 24.04 (2.39) and 26.04 (2.43), which both work.
 
 | distribution | glibc | links |
 |---|---|---|
+| Ubuntu 26.04 | 2.43 | yes |
 | Ubuntu 24.04, Debian 13 | 2.39 / 2.41 | yes |
 | Debian 12 | 2.36 | no |
 | Ubuntu 22.04 | 2.35 | no |
