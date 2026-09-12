@@ -237,6 +237,77 @@ across all platforms.
 `aws-lc-rs` (the TLS crypto provider) assembles its primitives and needs NASM on
 Windows.
 
+### Windows: linking a second Rust static library
+
+If your binary links both this package and another Rust staticlib — resvg is the
+common one — the mingw linker may report duplicate symbols:
+
+```
+multiple definition of `core::slice::sort::stable::driftsort_main::<...>'
+  other.a(std-5b2c85e8ac78ca34.std.5fd3e1da764ecfbe-cgu.0.rcgu.o)
+  libblitz.a(std-5b2c85e8ac78ca34.std.5fd3e1da764ecfbe-cgu.0.rcgu.o)
+```
+
+Add `-Wl,--allow-multiple-definition` to your own cgo `LDFLAGS`. That is the
+supported answer, not a workaround to be apologised for — see below.
+
+**Why it happens.** Every Rust staticlib embeds its own copy of `std`. On ELF
+and Mach-O, rustc marks those internals hidden and the linker makes them local,
+so nothing collides. COFF has no equivalent of hidden visibility, so they stay
+external. The collision is situational: it only fires when archive member
+selection pulls *both* archives' `std` objects into the link, which depends on
+which symbols each one happens to satisfy first.
+
+**Why it is safe.** Two regimes, both fine:
+
+- *Same rustc for both archives.* The duplicated definitions are the same
+  codegen unit from the same `std` build — note the identical `std-<hash>`
+  object name on both lines above. They are byte-identical, so keeping the
+  first is not a trade-off at all.
+- *Different rustc.* The mangled symbols carry a per-build crate hash, so they
+  stop colliding entirely. What is left is the unmangled runtime helpers
+  (`rust_eh_personality`, the `compiler_builtins` arithmetic routines), which
+  are equivalent implementations. A panic unwinding out of blitz would use the
+  other archive's personality routine — and blitz catches panics at its C
+  boundary anyway, reporting `CodePanic`.
+
+**Why this is not fixed in the archive.** The obvious fix — localize the
+offending symbols with `objcopy` when building `libblitz/windows-amd64` — was
+tested and does not work:
+
+| approach | result |
+|---|---|
+| `llvm-objcopy --localize-symbol` | `option is not supported for COFF` |
+| `objcopy -L` (GNU, works on COFF) | **breaks the standalone link** |
+| `objcopy --redefine-sym` (rename) | makes it **worse** |
+| `ld -r` + localize all but the API | blocked by mingw |
+
+Localizing cannot work at archive granularity: `rust_eh_personality` is defined
+in one object but referenced-undefined by **552** others in the same archive, so
+localizing the definition strands all 552. Linking this package on its own then
+fails with `undefined reference to 'rust_eh_personality'` — it would only link
+for consumers who *also* pull in resvg.
+
+Renaming is worse. It rewrites the definition and all 552 references
+consistently, but that leaves the original name unsatisfied, so the linker pulls
+the *other* archive's `std` object to provide it — manufacturing the very
+collision that otherwise never happens. Measured: baseline blitz + a second Rust
+staticlib linked cleanly; after renaming it failed.
+
+The textbook fix is a partial link followed by localizing everything except the
+14 `blitz_*` API symbols. It is blocked twice here: `--whole-archive` fails on
+the 2140 DLL import members (40 names are duplicated and rely on archive selection
+semantics), and `ld -r` over just the 1471 Rust objects fails with
+`unable to fill in DataDirectory[9]: _tls_used not defined correctly`, a mingw
+COFF partial-linking limitation.
+
+**The real long-term fix** is a DLL rather than a staticlib on Windows.
+`blitz-c` already declares `crate-type = ["staticlib", "cdylib", "rlib"]`, and a
+cdylib exports only the C API, which makes the collision structurally
+impossible. It is also far smaller — on Linux the cdylib is 30.0 MiB against the
+staticlib's 129.9 MiB. The cost is shipping `blitz.dll` next to the binary
+instead of linking statically.
+
 ### Linux needs glibc 2.38 or newer
 
 All three Linux archives have undefined references to `__isoc23_sscanf` and

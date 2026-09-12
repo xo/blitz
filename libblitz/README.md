@@ -141,6 +141,19 @@ This is *not* the same as building blitz-c's `production` profile. That sets
 for a staticlib to whoever links it, the archive comes out **larger** — 195.7
 MiB against the release profile's 129.9 MiB. Measured, not guessed.
 
+## Do not try to localize symbols in the Windows archive
+
+It looks like the obvious cleanup — the archive exports ~74,000 external symbols
+and only 14 of them are the blitz C API — but it has been tried and measured,
+and every variant either fails outright or breaks the standalone link. The
+constraint is that `rust_eh_personality` is defined in one object and
+referenced-undefined by 552 others, so nothing can be hidden at archive
+granularity, and mingw cannot partial-link this archive to fix that.
+
+The full analysis, including what consumers should do instead
+(`-Wl,--allow-multiple-definition`, which is safe here and why), is in
+"Windows: linking a second Rust static library" in ../README.md.
+
 ## Keeping the repository from bloating
 
 Each archive is tens of megabytes and git keeps every historical version
