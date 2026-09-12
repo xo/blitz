@@ -42,6 +42,19 @@ const (
 	Dark  ColorScheme = C.BLITZ_COLOR_SCHEME_DARK
 )
 
+// MediaType selects which `@media` rules apply.
+type MediaType uint8
+
+const (
+	// Screen is the default, and what a screenshot wants.
+	Screen MediaType = C.BLITZ_MEDIA_TYPE_SCREEN
+	// Print applies `@media print` rules: sites use these to drop nav and ad
+	// chrome, switch to serif, and show link targets. Styling only — Blitz has
+	// no fragmentation, so `@page` and `page-break-*` are parsed and ignored,
+	// and the render is still one continuous image. See WritePDF.
+	Print MediaType = C.BLITZ_MEDIA_TYPE_PRINT
+)
+
 // Error is a failure reported by the underlying library. Code is one of the
 // BLITZ_ERR_* values.
 type Error struct {
@@ -93,6 +106,8 @@ type Options struct {
 	EnableNet bool
 	// Grow the rendered height to fit the document.
 	FitContentHeight bool
+	// Screen (default) or Print.
+	MediaType MediaType
 }
 
 // DefaultOptions returns the library's defaults: 1200x800 CSS pixels at 1x,
@@ -109,6 +124,7 @@ func DefaultOptions() Options {
 		NetTimeoutMillis: uint32(d.net_timeout_ms),
 		EnableNet:        d.enable_net != 0,
 		FitContentHeight: d.fit_content_height != 0,
+		MediaType:        MediaType(d.media_type),
 	}
 }
 
@@ -440,6 +456,7 @@ func (o Options) toC() (C.BlitzRenderOptions, func()) {
 	copts.net_timeout_ms = C.uint32_t(o.NetTimeoutMillis)
 	copts.enable_net = boolToU8(o.EnableNet)
 	copts.fit_content_height = boolToU8(o.FitContentHeight)
+	copts.media_type = C.uint8_t(o.MediaType)
 
 	free := func() {}
 	if o.UserAgent != "" {
