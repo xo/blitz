@@ -16,12 +16,12 @@ go 1.27
 // from the parent module's zip, so this also keeps the root module at ~0.3 MiB
 // rather than carrying the archives twice.
 require (
-	github.com/xo/blitz/libblitz/linux-amd64 v0.1.0
-	github.com/xo/blitz/libblitz/linux-arm64 v0.1.0
-	github.com/xo/blitz/libblitz/linux-armv7 v0.1.0
-	github.com/xo/blitz/libblitz/macos-amd64 v0.1.0
-	github.com/xo/blitz/libblitz/macos-arm64 v0.1.0
-	github.com/xo/blitz/libblitz/windows-amd64 v0.1.0
+	github.com/xo/blitz/libblitz/linux-amd64 v0.1.2
+	github.com/xo/blitz/libblitz/linux-arm64 v0.1.2
+	github.com/xo/blitz/libblitz/linux-armv7 v0.1.2
+	github.com/xo/blitz/libblitz/macos-amd64 v0.1.2
+	github.com/xo/blitz/libblitz/macos-arm64 v0.1.2
+	github.com/xo/blitz/libblitz/windows-amd64 v0.1.2
 )
 
 // Local development only, and inert for anyone who depends on this module: the
