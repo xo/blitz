@@ -1,3 +1,6 @@
+# Every text file is checked out with LF endings, on Windows too.
+* text=auto eol=lf
+
 # Static archives are binary. Git usually detects this, but being explicit stops
 # any core.autocrlf or text=auto setting from touching them on a Windows
 # checkout, which would silently corrupt the archive.

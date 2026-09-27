@@ -135,7 +135,7 @@ scheduler from moving it between the render call and the error read — which
 would return another thread's error, or none at all. Every entry point wraps the
 pair in `runtime.LockOSThread`. `TestConcurrentErrorsAreNotCrossed` covers this.
 
-**`Close` waits for in-flight renders.** The context pointer is guarded by an
+**`Close` waits for in-flight renders.** The context pointer is guarded by a
 `sync.RWMutex`: renders take the read lock, `Close` takes the write lock. Without
 it, closing while a render is running is a use-after-free — an occasional
 segfault in production, and something `-race` catches immediately.
@@ -335,6 +335,20 @@ work around, and it is almost certainly not intended — `cross` exists to pin a
 *old* glibc for exactly this reason. Fixing it means building the Linux targets
 in an older base image and rebuilding; the floor then drops to whatever that
 image ships.
+
+## Documents
+
+- [`AGENTS.md`](AGENTS.md) holds the rules for a coding agent: the standing
+  rules, the layout, the commands and the Go conventions. `CLAUDE.md` imports
+  it for Claude Code.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) is the guide for a person who changes
+  the project, and says how to install the agent skills.
+- [`docs/PLAN.md`](docs/PLAN.md) holds the plan, every decision with its
+  reason, and the open questions.
+- [`docs/BACKLOG.md`](docs/BACKLOG.md) holds the work that is known and not
+  done.
+- [`libblitz/README.md`](libblitz/README.md) explains why the archives are
+  committed, why each platform is its own module, and how to release.
 
 ## License
 

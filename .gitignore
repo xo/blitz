@@ -24,3 +24,5 @@
 .vscode/
 
 /*.png
+
+.claude/settings.local.json
