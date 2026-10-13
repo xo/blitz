@@ -61,9 +61,36 @@ declare -A TARGETS=(
     # .lib does not combine with it cleanly. The gnu target also names its
     # output libblitz.a, so `-lblitz` works unchanged everywhere.
     [windows-amd64]=x86_64-pc-windows-gnu
+    # musl for Alpine and other musl hosts. Go cannot select on the libc, so
+    # these two are chosen with the `musl` build tag. See README.md.
+    [linux-amd64-musl]=x86_64-unknown-linux-musl
+    [linux-arm64-musl]=aarch64-unknown-linux-musl
+    # -gnullvm, not -msvc: the msvc target needs Visual Studio.
+    [windows-arm64]=aarch64-pc-windows-gnullvm
+    [freebsd-amd64]=x86_64-unknown-freebsd
 )
 
-ALL_TARGETS=(linux-amd64 linux-arm64 linux-armv7 macos-amd64 macos-arm64 windows-amd64)
+ALL_TARGETS=(linux-amd64 linux-arm64 linux-armv7 macos-amd64 macos-arm64 windows-amd64
+             linux-amd64-musl linux-arm64-musl windows-arm64 freebsd-amd64)
+
+# Targets that cross cannot build, built with `cargo zigbuild` and the zig on
+# the PATH instead (cargo install cargo-zigbuild). cross has no image for any
+# Windows ARM target, and the glibc in its FreeBSD image is too old to run the
+# build scripts of crates such as libc.
+declare -A ZIGBUILD=(
+    [windows-arm64]=1
+    [freebsd-amd64]=1
+)
+
+# Targets built with the fontconfig-dlopen feature of blitz-c. They have no
+# fontconfig for the target to link against: there is no multiarch package for
+# musl, and a Linux host has none for FreeBSD. The archive loads fontconfig with
+# dlopen at run time instead, which a fully static link cannot do.
+declare -A FONTCONFIG_DLOPEN=(
+    [linux-amd64-musl]=1
+    [linux-arm64-musl]=1
+    [freebsd-amd64]=1
+)
 
 # GOOS,GOARCH for each target key, used to check the #cgo directives in
 # blitz.go still name the archives this script produced.
@@ -74,16 +101,24 @@ declare -A GO_PLATFORM=(
     [macos-amd64]="darwin,amd64"
     [macos-arm64]="darwin,arm64"
     [windows-amd64]="windows,amd64"
+    [linux-amd64-musl]="linux,amd64"
+    [linux-arm64-musl]="linux,arm64"
+    [windows-arm64]="windows,arm64"
+    [freebsd-amd64]="freebsd,amd64"
 )
 
 # //go:build constraint for each target, used in the generated lib.go.
 declare -A GO_BUILD_TAG=(
-    [linux-amd64]="linux && amd64"
-    [linux-arm64]="linux && arm64"
+    [linux-amd64]="linux && amd64 && !musl"
+    [linux-arm64]="linux && arm64 && !musl"
     [linux-armv7]="linux && arm"
     [macos-amd64]="darwin && amd64"
     [macos-arm64]="darwin && arm64"
     [windows-amd64]="windows && amd64"
+    [linux-amd64-musl]="linux && amd64 && musl"
+    [linux-arm64-musl]="linux && arm64 && musl"
+    [windows-arm64]="windows && arm64"
+    [freebsd-amd64]="freebsd && amd64"
 )
 
 # GOOS_GOARCH for each target, naming the root module's link_*.go files.
@@ -94,6 +129,10 @@ declare -A GO_FILE_SUFFIX=(
     [macos-amd64]=darwin_amd64
     [macos-arm64]=darwin_arm64
     [windows-amd64]=windows_amd64
+    [linux-amd64-musl]=linux_amd64_musl
+    [linux-arm64-musl]=linux_arm64_musl
+    [windows-arm64]=windows_arm64
+    [freebsd-amd64]=freebsd_amd64
 )
 
 # System libraries each target needs on top of the blitz archives, emitted into
@@ -116,14 +155,27 @@ declare -A SYSTEM_LIBS=(
     # dwrite and friends, but the archive calls DWriteCreateFactory and ~50
     # other DirectWrite/GDI/OLE entry points.
     [windows-amd64]="-lws2_32 -lbcrypt -lcrypt32 -lsecur32 -lncrypt -lntdll -luserenv -lkernel32 -ldbghelp -lole32 -loleaut32 -ldwrite -lgdi32 -lusp10 -lshell32 -ladvapi32 -luuid -lmsvcrt -lpthread"
+    # The amd64 list, with -lunwind from rustc and without -lmsvcrt, which has
+    # no arm64 build: the gnullvm target uses the UCRT.
+    [windows-arm64]="-lws2_32 -lbcrypt -lcrypt32 -lsecur32 -lncrypt -lntdll -luserenv -lkernel32 -ldbghelp -lole32 -loleaut32 -ldwrite -lgdi32 -lusp10 -lshell32 -ladvapi32 -luuid -lunwind -lpthread"
+    # No -lfontconfig and no -lfreetype: these three load fontconfig with
+    # dlopen (FONTCONFIG_DLOPEN above). No -lm on musl, which folds it into
+    # libc. -lunwind is not implicit on musl: Alpine needs its libunwind-dev
+    # package at link time. rustc printed -ldl -lunwind -lc.
+    [linux-amd64-musl]="-ldl -lunwind -lc"
+    [linux-arm64-musl]="-ldl -lunwind -lc"
+    # rustc printed this list with every library repeated. These are the
+    # FreeBSD base libraries, so a real FreeBSD host has them all, and zig does
+    # not: a link test with zig cc has to leave most of them out.
+    [freebsd-amd64]="-lrt -lutil -lexecinfo -lkvm -lmemstat -lprocstat -ldevstat -lpthread -lgcc_s -lc -lm"
 )
 
 # Each target ships as its own Go module nested under libblitz/, so a consumer
 # downloads only the archives for the platform it is building for. The root
 # module's 648 MiB tree is past the 500 MiB cap the go command puts on a module
 # (golang.org/x/mod/zip.MaxZipFile, applied to the extracted content as well as
-# the zip), and even under it, one module means every consumer pays for all six
-# targets. Directories holding a go.mod are excluded from the parent module's
+# the zip), and even under it, one module means every consumer pays for every
+# target. Directories holding a go.mod are excluded from the parent module's
 # zip, so this also keeps the root module small.
 MODULE_PREFIX="github.com/xo/blitz/libblitz"
 # The `go` directive for the generated modules. Deliberately lower than the root
@@ -173,7 +225,19 @@ done
 
 command -v git >/dev/null 2>&1 || die "git is required"
 if [[ "$MODULES_ONLY" -eq 0 && "$SLIM_ONLY" -eq 0 ]]; then
-    command -v cross >/dev/null 2>&1 || die "cross is required (cargo install cross)"
+    for t in "${selected[@]}"; do
+        if [[ -n "${ZIGBUILD[$t]:-}" ]]; then
+            command -v cargo-zigbuild >/dev/null 2>&1 \
+                || die "$t needs cargo-zigbuild (cargo install cargo-zigbuild)"
+            command -v zig >/dev/null 2>&1 || die "$t needs zig on the PATH"
+            # Not added for you: that is a download, and a build should not
+            # start one. cross keeps its own targets in its images.
+            rustup target list --installed 2>/dev/null | grep -qx "${TARGETS[$t]}" \
+                || die "$t needs the Rust target: rustup target add ${TARGETS[$t]}"
+        else
+            command -v cross >/dev/null 2>&1 || die "cross is required (cargo install cross)"
+        fi
+    done
 fi
 
 # --- source ------------------------------------------------------------------
@@ -315,19 +379,35 @@ split_archive() {
     archive="$dest/libblitz.a"
 
     # llvm-ar, not ar: it reads and writes ELF, Mach-O and COFF archives alike,
-    # so one code path covers all six targets from this one Linux host. GNU ar
+    # so one code path covers every target from this one Linux host. GNU ar
     # cannot produce a symbol table the Apple linker will accept.
     command -v llvm-ar >/dev/null 2>&1 \
         || die "llvm-ar is required to split archives over $((MAX_ARCHIVE_BYTES / 1024 / 1024)) MiB (install llvm)"
 
-    # Extraction flattens every member into one directory, so two members
-    # sharing a name would overwrite each other and silently drop objects.
-    if [[ -n "$(llvm-ar t "$archive" | sort | uniq -d)" ]]; then
-        die "$archive has duplicate member names; cannot split it by extraction"
-    fi
-
     work="$(mktemp -d)"
     ( cd "$work" && llvm-ar x "$archive" )
+
+    # Extraction flattens every member into one directory, so two members
+    # sharing a name overwrite each other and silently drop objects. The
+    # Windows archives have such names: they carry the import stubs of the
+    # system DLLs, and advapi32.dll alone appears 199 times in windows-arm64.
+    # llvm-ar's N modifier extracts the nth instance of a name, so each one
+    # comes out as <n>.<name>. A member name is only a label, because the
+    # linker finds an object through the symbol table that qcs rewrites below.
+    local dups name count n
+    dups="$(llvm-ar t "$archive" | sort | uniq -c | awk '$1 > 1 { print $2, $1 }')"
+    while read -r name count; do
+        [[ -n "$name" ]] || continue
+        rm -f "$work/$name"
+        for (( n = 1; n <= count; n++ )); do
+            ( cd "$work" && llvm-ar xN "$n" "$archive" "$name" && mv "$name" "$n.$name" )
+        done
+    done <<< "$dups"
+
+    # Every member has to be a file of its own now, or one was lost.
+    if [[ "$(find "$work" -maxdepth 1 -type f | wc -l)" -ne "$(llvm-ar t "$archive" | wc -l)" ]]; then
+        die "$archive: the members extracted do not match the members listed"
+    fi
 
     # The plan lives OUTSIDE $work. Writing it inside raced with the `find`
     # below: a pipeline starts every stage at once, so the shell created the
@@ -480,8 +560,8 @@ package blitz
 
 // Blank import for the link only: the package has no API, it just carries the
 // $target archives and the #cgo LDFLAGS naming them. Because this file is
-// build-tagged, the go command never downloads the other five platforms'
-// modules when building for this one.
+// build-tagged, the go command never downloads the other platforms' modules
+// when building for this one.
 import _ "$MODULE_PREFIX/$target"
 EOF
     done
@@ -510,11 +590,19 @@ build_target() {
     # archive, rather than a second invocation that could disagree with it.
     rustflags_var="CARGO_TARGET_$(tr '[:lower:]-' '[:upper:]_' <<< "$triple")_RUSTFLAGS"
 
+    local build=(cross build) features=()
+    if [[ -n "${ZIGBUILD[$target]:-}" ]]; then
+        build=(cargo zigbuild)
+    fi
+    if [[ -n "${FONTCONFIG_DLOPEN[$target]:-}" ]]; then
+        features=(--features fontconfig-dlopen)
+    fi
+
     (
         cd "$SRC"
         export "$rustflags_var=--print=native-static-libs"
         set -x
-        cross build --verbose $profile_flag --target "$triple" $JOBS_FLAG
+        "${build[@]}" --verbose $profile_flag --target "$triple" "${features[@]}" $JOBS_FLAG
     ) 2>&1 | tee "$dest/build.log"
 
     archive="$SRC/target/$triple/$profile_dir/libblitz.a"
@@ -610,8 +698,13 @@ fetch_source
 
 # cross looks for Cross.toml next to the manifest it is building, so copy this
 # repo's copy into the checkout.
-if [[ -z "$LOCAL_SRC" && -f Cross.toml ]]; then
-    cp Cross.toml "$SRC/Cross.toml"
+if [[ -f Cross.toml ]]; then
+    if [[ -z "$LOCAL_SRC" ]]; then
+        cp Cross.toml "$SRC/Cross.toml"
+    else
+        # A working copy is not ours to write into, so say where it is.
+        export CROSS_CONFIG="$PWD/Cross.toml"
+    fi
 fi
 
 mkdir -p "$OUT"

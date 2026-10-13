@@ -40,6 +40,25 @@ show whether the pieces link.
 
 Source: the message of `6888437`.
 
+### Run windows-arm64 and freebsd-amd64
+
+Both archives link into a Go test binary with `zig cc`, and nobody has run
+either. `windows-arm64` can run on the `windows-11-arm` runner of GitHub. The
+FreeBSD archive links against `execinfo`, `kvm`, `memstat`, `procstat` and
+`devstat`, which zig does not ship, so a real FreeBSD host is the only check of
+those flags.
+
+Source: D24.
+
+### Find out why slimming does nothing for windows-arm64
+
+`slim_archive` removes the LLVM bitcode and the debug information. It saved 13%
+on linux-amd64 and left windows-arm64 at 134 MiB, the same size as before. Check
+whether the archive has either one, or whether `llvm-objcopy` skips the COFF
+members. If the archive is under 100 MiB after that, it needs no split.
+
+Source: the build of `windows-arm64` on 2026-10-14.
+
 ## Releases
 
 ### Check the require block before a release
@@ -62,6 +81,16 @@ its own, so CI passes, but the version in the workflow is not the version
 that runs. `actions/setup-go` can read `go-version-file: go.mod` instead.
 
 Source: found in the setup of D22. Open question 6 in `PLAN.md` asks Ken.
+
+### Add CI jobs for the four new targets
+
+CI links four of the ten targets (D20). The new ones need a job each: an Alpine
+container for the two musl targets, the `windows-11-arm` runner for
+`windows-arm64`, and a way to run FreeBSD that does not start a virtual machine
+in this repository's work. `make check-generated` already covers the generated
+files of all ten.
+
+Source: D23. Open question 2 in `PLAN.md` asks Ken.
 
 ### Decide whether CI runs gofmt and a linter
 

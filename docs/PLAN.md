@@ -12,7 +12,7 @@ it.
 | --- | --- | --- |
 | [D1](#d1-blitz-wraps-the-c-interface-of-xoblitz-c-through-cgo-decided) | blitz wraps the C interface of xo/blitz-c through cgo | Decided |
 | [D2](#d2-the-archives-are-committed-to-the-repository-decided) | The archives are committed to the repository | Decided |
-| [D3](#d3-every-target-is-built-with-cross-under-podman-on-a-linux-host-decided) | Every target is built with cross under podman on a Linux host | Decided |
+| [D3](#d3-every-target-is-built-with-cross-under-podman-on-a-linux-host-decided-amended-by-d24) | Every target is built with cross under podman on a Linux host | Decided. Amended by D24 |
 | [D4](#d4-blitzgo-names-the-archives-and-the-link-flags-of-each-platform-by-hand-amended-by-d5) | blitz.go names the archives and the link flags of each platform by hand | Amended by D5 |
 | [D5](#d5-each-platform-is-its-own-go-module-and-build-blitzsh-generates-its-link-flags-decided-amends-d4) | Each platform is its own Go module, and build-blitz.sh generates its link flags | Decided. Amends D4 |
 | [D6](#d6-an-archive-over-100-mib-is-split-into-archives-that-link-as-a-group-decided) | An archive over 100 MiB is split into archives that link as a group | Decided |
@@ -32,6 +32,10 @@ it.
 | [D20](#d20-ci-links-four-of-the-six-targets-proposed) | CI links four of the six targets | Proposed |
 | [D21](#d21-the-agent-skills-are-committed-under-agents-and-claude-amended-by-d22) | The agent skills are committed under .agents and .claude | Amended by D22 |
 | [D22](#d22-blitz-is-set-up-for-coding-agents-as-every-xo-repository-is-decided-amends-d21) | blitz is set up for coding agents as every xo repository is | Decided. Amends D21 |
+| [D23](#d23-blitz-ships-the-same-ten-targets-as-resvg-and-magic-decided) | blitz ships the same ten targets as resvg and magic | Decided |
+| [D24](#d24-windows-arm64-and-freebsd-amd64-are-built-with-cargo-zigbuild-decided-amends-d3) | windows-arm64 and freebsd-amd64 are built with cargo zigbuild | Decided. Amends D3 |
+| [D25](#d25-the-musl-and-freebsd-archives-load-fontconfig-with-dlopen-proposed) | The musl and FreeBSD archives load fontconfig with dlopen | Proposed |
+| [D26](#d26-blitz-c-pins-blitz-e72650a-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz e72650a, and the archives are rebuilt from it | Decided |
 
 ## Purpose
 
@@ -43,11 +47,12 @@ needs no other step, because the static archives are in the repository.
 
 ## Current state
 
-This section describes the repository on 2026-09-27, at `8a5767d`.
+This section describes the repository on 2026-10-14, after the work of D23 to
+D26.
 
-The root module is at v0.3.1. It requires the six platform modules at v0.1.2.
-Those archives were built from blitz-c `4910b87`, which pins
-dioxuslabs/blitz `7100a3b`. `version.txt` records the blitz-c revision.
+The root module is at v0.4.0. It requires ten platform modules at v0.1.3.
+Those archives came from blitz-c `3376847`, which pins dioxuslabs/blitz
+`e72650a` (D26). `version.txt` records the blitz-c revision.
 
 The package has these parts:
 
@@ -59,8 +64,9 @@ The package has these parts:
 - `build-blitz.sh` builds the archives and generates the Go files of each
   platform module.
 
-The six targets are linux-amd64, linux-arm64, linux-armv7, macos-amd64,
-macos-arm64 and windows-amd64. CI links and tests four of them (D20).
+The ten targets are linux-amd64, linux-arm64, linux-armv7, macos-amd64,
+macos-arm64, windows-amd64, linux-amd64-musl, linux-arm64-musl, windows-arm64
+and freebsd-amd64 (D23). CI links and tests four of them (D20).
 
 The repository has no open issue, no pull request and no TODO comment.
 `docs/BACKLOG.md` holds the work that is known and not done.
@@ -77,6 +83,8 @@ open questions below.
 Each decision gives what was decided, where the history shows it, and the
 reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
+
+D23 to D26 were written on 2026-10-14 from the work that they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -106,7 +114,7 @@ generate`. `libblitz/README.md` gives the full reason. `.gitattributes` marks
 each archive `binary -diff -merge`, so that git never converts, diffs or merges
 one.
 
-### D3. Every target is built with cross under podman on a Linux host. Decided.
+### D3. Every target is built with cross under podman on a Linux host. Decided. Amended by D24.
 
 `build-blitz.sh` builds every target with
 [cross](https://github.com/cross-rs/cross), and there is no native build path.
@@ -313,13 +321,94 @@ decisions stay in this file (dbmeta D111). This change did the following:
   Code permissions of one person. `.gitattributes` holds
   `* text=auto eol=lf`.
 
+### D23. blitz ships the same ten targets as resvg and magic. Decided.
+
+On 2026-10-14 Ken listed the targets to support: darwin_amd64, darwin_arm64,
+freebsd_amd64, linux_amd64, linux_amd64_musl, linux_arm, linux_arm64,
+linux_arm64_musl, windows_amd64 and windows_arm64. He asked that blitz match
+resvg, and the magic and resvg sessions confirmed the same list for their own
+repositories. blitz shipped six of them (D5). Four are new: `linux-amd64-musl`,
+`linux-arm64-musl`, `windows-arm64` and `freebsd-amd64`.
+
+The directory names keep the form of D11, which is `linux-amd64` and not
+`linux_amd64`, and `macos-` and not `darwin_`. Go cannot select on the C
+library, so the two musl targets use the `musl` build tag. The glibc link files
+of linux/amd64 and linux/arm64 got `!musl`. This is the same choice that resvg
+made.
+
+The rule of D10 now covers ten targets: rebuild all of them in one commit, with
+`version.txt`. `windows-arm64` is 134 MiB after slimming, which is over the
+limit of GitHub, so it is split in two (D6). Its archive holds 53 names of
+import stubs that repeat, about 2,400 members, and the splitter used to refuse
+an archive like that. It now extracts each repeated member by its position, with
+the `N` modifier of `llvm-ar`, and makes sure that no member is lost.
+
+### D24. windows-arm64 and freebsd-amd64 are built with cargo zigbuild. Decided. Amends D3.
+
+D3 said that every target goes through cross. That cannot hold for two targets.
+cross has no image for any Windows ARM target, and the glibc in its FreeBSD
+image is too old to run the build scripts of the `libc` crate. On 2026-10-14
+Ken said to do what resvg does, and resvg builds both with `cargo zigbuild`
+(resvg D16). So `build-blitz.sh` builds `windows-arm64` and `freebsd-amd64` with
+`cargo zigbuild`, and `zig` is the C compiler and the linker. The `ZIGBUILD`
+table in the script names them. The other eight targets still use cross.
+
+`windows-arm64` is built for `aarch64-pc-windows-gnullvm`, because the `msvc`
+target needs Visual Studio. This extends D8, which chose `-gnu` for amd64 for
+the same reason. `freebsd-amd64` is built for `x86_64-unknown-freebsd`.
+
+Both archives link into a Go test binary with `zig cc`. Nobody has run either
+one, because no Windows ARM or FreeBSD machine was available, and this work
+starts no virtual machine. The script stops and names a missing Rust target,
+and it never runs `rustup target add` for you, because that is a download.
+
+### D25. The musl and FreeBSD archives load fontconfig with dlopen. Proposed.
+
+The build script of `yeslogic-fontconfig-sys` runs `pkg-config` for fontconfig,
+and the target needs the development files. A musl image has no fontconfig for
+its target, and a Linux host has none for FreeBSD. All three builds failed on
+this. blitz-c now has an opt-in feature, `fontconfig-dlopen`, which turns on
+the feature of the same name in `fontique`. `build-blitz.sh` builds the musl
+targets and `freebsd-amd64` with it (`FONTCONFIG_DLOPEN`), and their link flags
+name no `-lfontconfig`. The `RUST_FONTCONFIG_DLOPEN` variable alone does not
+work. It skips `pkg-config`, and `fontique` still looks for symbols that only
+the feature provides.
+
+The cost is that a program that links fully statically cannot call `dlopen`, so
+it finds no fonts and renders blank text with no error. A static musl test
+binary showed this on 2026-10-14: the two tests that depend on text height
+failed and the other tests passed. The same tests passed on Alpine 3.20
+with a dynamic link, on amd64 and on arm64 under qemu.
+
+The history does not show that Ken chose this, so it is Proposed. The other way
+is to build fontconfig and FreeType from source for each target and link them
+into the archive, which is more work and was not tried.
+
+### D26. blitz-c pins blitz e72650a, and the archives are rebuilt from it. Decided.
+
+On 2026-10-14 Ken asked to update to the latest blitz. xo/blitz-c had no new
+commit, so the update is a new pin of the renderer. The pin moves from
+dioxuslabs/blitz `7100a3b` to `e72650a`, which is 137 commits, including Stylo
+0.22, AnyRender 0.14 and a new Taffy. The AnyRender pin moves from `562c03e` to
+`870407d`. `scripts/update-pins.sh` in blitz-c failed at first, and it needed
+`anyrender` 0.14.0 and `anyrender_vello_cpu` 0.18.0 in the manifest. blitz-c
+then built on the host with no change to its source.
+
+All ten archives are rebuilt from that pin. The change is commit `3376847` in
+xo/blitz-c, and `version.txt` records it. The same commit adds the
+`fontconfig-dlopen` feature of D25.
+
 ## Open questions for Ken
 
 1. Does CI run gofmt again? D19 records why it does not run now, and the
    reason is not recorded.
-2. Does CI link linux-armv7 and macos-amd64? D20 records that it stopped in
-   `d1169d5`. The linux-armv7 archive is 98.1 MiB, so the next update of
-   blitz-c will probably split it, and no CI job links the pieces.
+2. Does CI link the targets that it does not link now? D20 records that it
+   stopped in `d1169d5`. Six of the ten targets have no CI job: linux-armv7,
+   macos-amd64, and the four from D23. The linux-armv7 archive is 98.1 MiB, so
+   the next update of blitz-c will probably split it, and no CI job links the
+   pieces. A musl job needs an Alpine container. A windows-arm64 job can use the
+   `windows-11-arm` runner. FreeBSD needs a virtual machine, which this work did
+   not start.
 3. Is glibc 2.38 the floor for Linux, or do the Linux archives move to an older
    base image? The README says that the floor is almost certainly not
    intended.
@@ -330,3 +419,8 @@ decisions stay in this file (dbmeta D111). This change did the following:
    `go vet`.
 6. Which Go does CI install? The workflow names 1.22 and `go.mod` names 1.27
    (D17).
+7. Is dlopen for fontconfig right for the musl and FreeBSD archives? D25 is
+   Proposed. It works on Alpine. FreeBSD is untested.
+8. Do `linux_riscv64`, `linux_ppc64le` and `linux_s390x` come? The magic and
+    resvg sessions report that nobody decided them. They also report a decision
+    against netbsd, solaris, 32-bit x86, android, ios and wasm.

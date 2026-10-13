@@ -23,19 +23,20 @@ every other agent read the same rules. Edit this file, not that one.
 ## Which document to read
 
 `docs/PLAN.md` holds the plan, every decision and the open questions. Read the
-status of a decision, because some amend an earlier one, and two are only
+status of a decision, because some amend an earlier one, and some are only
 proposed. Do not decide an open question on your own. Ask Ken.
 
 | If you are | Read |
 | --- | --- |
 | using the package or the example command | `README.md` |
 | asking why something is the way it is | the decisions in `docs/PLAN.md` |
-| rebuilding the archives or updating blitz-c | "Rebuilding the archives" and "Updating" in `README.md`, then `libblitz/README.md`, D3, D6, D7 and D10 |
+| rebuilding the archives or updating blitz-c | "Rebuilding the archives" and "Updating" in `README.md`, then `libblitz/README.md`, D3, D6, D7, D10 and D24 |
+| adding a platform | D23 to D25, then the tables in `build-blitz.sh` (`TARGETS`, `ALL_TARGETS`, `GO_BUILD_TAG`, `GO_FILE_SUFFIX`, `SYSTEM_LIBS`, `ZIGBUILD`, `FONTCONFIG_DLOPEN`), `Cross.toml` and `go.mod` |
 | changing the link flags of a platform | the `SYSTEM_LIBS` table in `build-blitz.sh`, then `make modules`. See D5 |
 | tagging a release | "Releasing" in `libblitz/README.md` and D18 |
 | changing a call into the C library | "Concurrency" in `README.md`, D12, and "Go conventions" below |
 | adding a field to `Options` | "Go conventions" below, and `ae77651` as the example |
-| a link failure on Windows or on an old Linux | "Platform notes" in `README.md`, D8 and D9 |
+| a link failure on Windows, FreeBSD, musl or an old Linux | "Platform notes" in `README.md`, D8, D9 and D25 |
 | looking for work that is known and not done | `docs/BACKLOG.md` |
 | writing a document, a code comment, an error message or a commit message | the simple-english skill. Load it first |
 | writing or reviewing Go code | the go-pedantry skill. Load it first |
@@ -55,21 +56,27 @@ does not hold.
   `libblitz/blitz.h`.
 - `pdf.go` writes a PDF from a render, with no dependency.
 - `link_GOOS_GOARCH.go` is one blank import per platform, gated by a build
-  constraint. `build-blitz.sh` generates each one. Do not edit them.
+  constraint. `build-blitz.sh` generates each one. Do not edit them. The two
+  musl targets use the names `link_linux_amd64_musl.go` and
+  `link_linux_arm64_musl.go`, and the `musl` build tag selects them.
 - `libblitz/blitz.h` is the header, copied from blitz-c.
 - `libblitz/<target>/` is one Go module per target, such as
-  `github.com/xo/blitz/libblitz/linux-amd64`. It holds the archives,
+  `github.com/xo/blitz/libblitz/linux-amd64`. There are ten: linux-amd64,
+  linux-arm64, linux-armv7, macos-amd64, macos-arm64, windows-amd64,
+  linux-amd64-musl, linux-arm64-musl, windows-arm64 and freebsd-amd64. It holds the archives,
   `native-static-libs.txt`, and the generated `go.mod`, `doc.go` and `lib.go`.
   The directory names are module paths and do not change (D11).
-- `build-blitz.sh` builds the archives with cross and generates the Go files.
-  `Cross.toml` holds the images and the target libraries that cross uses.
+- `build-blitz.sh` builds the archives and generates the Go files. Eight
+  targets build with cross. `windows-arm64` and `freebsd-amd64` build with
+  `cargo zigbuild` (D24). `Cross.toml` holds the images and the target
+  libraries that cross uses.
 - `version.txt` names the blitz-c revision that the archives came from (D10).
 - `cmd/blitz-render/` is an example command.
 - `testdata/` holds `sample.md` and `sample.html`. The tests write their
   renders to `testdata/output/`, which git ignores.
 - `docs/` holds `PLAN.md` and `BACKLOG.md`.
 
-The root `go.mod` requires the six platform modules, and a `replace` block
+The root `go.mod` requires the ten platform modules, and a `replace` block
 points each one at its directory here. The `replace` block works only in this
 repository. The `require` versions change by hand at a release (D18).
 
@@ -102,8 +109,18 @@ as `fonts-dejavu-core`. Without fonts, the library returns an almost empty PNG
 and reports success, and `checkPNG` then fails the test.
 
 Do not run `build-blitz.sh` or `make libs` unless the task is to rebuild the
-archives. It starts a container for each target and takes a long time. If you
-rebuild, rebuild all six targets in one commit with `version.txt` (D10).
+archives. It starts a container for each cross target and takes a long time. If
+you rebuild, rebuild all ten targets in one commit with `version.txt` (D10). A
+build of `windows-arm64` or `freebsd-amd64` needs `cargo-zigbuild`, `zig` and
+the Rust targets `aarch64-pc-windows-gnullvm` and `x86_64-unknown-freebsd`. The
+script stops and names a missing Rust target. Do not run `rustup target add`
+without asking Ken, because it downloads files. Build from a local blitz-c with
+`--local /path/to/blitz-c`, and give an absolute path.
+
+A target with no fontconfig for it, which is musl and FreeBSD, builds with the
+`fontconfig-dlopen` feature of blitz-c (D25). Pass the feature with
+`--features`. Do not use the `RUST_FONTCONFIG_DLOPEN` variable alone, because it
+skips `pkg-config` and leaves `fontique` without the symbols it needs.
 
 ## Go conventions
 

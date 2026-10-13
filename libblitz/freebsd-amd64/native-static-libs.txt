@@ -1,0 +1,1 @@
+-lc -lrt -lutil -lexecinfo -lkvm -lmemstat -lkvm -lutil -lprocstat -lrt -ldevstat -lexecinfo -lpthread -lgcc_s -lc -lm -lrt -lpthread -lrt -lutil -lexecinfo -lkvm -lmemstat -lkvm -lutil -lprocstat -lrt -ldevstat

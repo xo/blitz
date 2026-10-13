@@ -42,6 +42,20 @@ pre-build = [
     "apt-get update && apt-get install --assume-yes --no-install-recommends pkg-config cmake python3 libssl-dev:$CROSS_DEB_ARCH libfontconfig1-dev:$CROSS_DEB_ARCH",
 ]
 
+# The musl images have no cmake and no python3, which aws-lc-rs and stylo need.
+# They also have no fontconfig for the target, so build-blitz.sh builds these two
+# with the fontconfig-dlopen feature of blitz-c. That is why there is no
+# pkg-config, no OpenSSL and no libfontconfig-dev line here.
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get install --assume-yes --no-install-recommends cmake python3",
+]
+
+[target.aarch64-unknown-linux-musl]
+pre-build = [
+    "apt-get update && apt-get install --assume-yes --no-install-recommends cmake python3",
+]
+
 # Windows links schannel rather than OpenSSL, and uses DirectWrite rather than
 # fontconfig, so it needs neither. nasm is for aws-lc-rs.
 [target.x86_64-pc-windows-gnu]

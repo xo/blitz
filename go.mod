@@ -7,21 +7,25 @@ go 1.27
 // them pinned for every platform, but only the one matching GOOS/GOARCH is ever
 // downloaded: the imports live in build-tagged link_*.go files, and the go
 // command fetches a module's zip only when a package it provides is actually in
-// the build. A linux/amd64 build pulls ~33 MiB, not the ~190 MiB all six come
+// the build. A linux/amd64 build pulls ~33 MiB, not the ~264 MiB all ten come
 // to.
 //
-// Splitting them out is not optional. The archives total ~648 MiB, and the go
+// Splitting them out is not optional. The archives total ~1057 MiB, and the go
 // command refuses a module whose zip *or extracted content* is over 500 MiB
 // (golang.org/x/mod/zip.MaxZipFile). Directories holding a go.mod are excluded
 // from the parent module's zip, so this also keeps the root module at ~0.3 MiB
 // rather than carrying the archives twice.
 require (
-	github.com/xo/blitz/libblitz/linux-amd64 v0.1.2
-	github.com/xo/blitz/libblitz/linux-arm64 v0.1.2
-	github.com/xo/blitz/libblitz/linux-armv7 v0.1.2
-	github.com/xo/blitz/libblitz/macos-amd64 v0.1.2
-	github.com/xo/blitz/libblitz/macos-arm64 v0.1.2
-	github.com/xo/blitz/libblitz/windows-amd64 v0.1.2
+	github.com/xo/blitz/libblitz/linux-amd64 v0.1.3
+	github.com/xo/blitz/libblitz/linux-arm64 v0.1.3
+	github.com/xo/blitz/libblitz/linux-armv7 v0.1.3
+	github.com/xo/blitz/libblitz/macos-amd64 v0.1.3
+	github.com/xo/blitz/libblitz/macos-arm64 v0.1.3
+	github.com/xo/blitz/libblitz/windows-amd64 v0.1.3
+	github.com/xo/blitz/libblitz/freebsd-amd64 v0.1.3
+	github.com/xo/blitz/libblitz/linux-amd64-musl v0.1.3
+	github.com/xo/blitz/libblitz/linux-arm64-musl v0.1.3
+	github.com/xo/blitz/libblitz/windows-arm64 v0.1.3
 )
 
 // Local development only, and inert for anyone who depends on this module: the
@@ -46,4 +50,8 @@ replace (
 	github.com/xo/blitz/libblitz/macos-amd64 => ./libblitz/macos-amd64
 	github.com/xo/blitz/libblitz/macos-arm64 => ./libblitz/macos-arm64
 	github.com/xo/blitz/libblitz/windows-amd64 => ./libblitz/windows-amd64
+	github.com/xo/blitz/libblitz/freebsd-amd64 => ./libblitz/freebsd-amd64
+	github.com/xo/blitz/libblitz/linux-amd64-musl => ./libblitz/linux-amd64-musl
+	github.com/xo/blitz/libblitz/linux-arm64-musl => ./libblitz/linux-arm64-musl
+	github.com/xo/blitz/libblitz/windows-arm64 => ./libblitz/windows-arm64
 )

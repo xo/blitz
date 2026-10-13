@@ -17,6 +17,10 @@ libblitz/
   macos-amd64/libblitz.a
   macos-arm64/libblitz.a
   windows-amd64/libblitz.a
+  linux-amd64-musl/...                opt-in with the musl build tag
+  linux-arm64-musl/...                opt-in with the musl build tag
+  windows-arm64/...                   split: over the 100 MiB file limit
+  freebsd-amd64/...                   split: over the 100 MiB file limit
 ```
 
 Everything here is produced by `../build-blitz.sh`. Only `build.log` is
@@ -44,13 +48,13 @@ So the archives go in the tree. They're marked `binary -diff -merge` in
 
 ## Why each platform is its own module
 
-The six targets come to ~648 MiB. The go command refuses a module whose zip
+The ten targets come to ~1057 MiB. The go command refuses a module whose zip
 *or extracted content* is over 500 MiB (`golang.org/x/mod/zip.MaxZipFile`), so
 shipping them in the root module does not work at all — it is a hard failure,
 not a slow download.
 
 Even under the cap it would be the wrong shape: one module means every consumer
-pays for all six targets to link one.
+pays for all ten targets to link one.
 
 Splitting fixes both. Each target gets its own `go.mod`, and the root module
 imports it from a build-tagged `link_GOOS_GOARCH.go`. The go command downloads
@@ -59,17 +63,18 @@ linux/amd64 build fetches the linux-amd64 module and nothing else. Directories
 holding a `go.mod` are excluded from the parent module's zip, so the root module
 stays small (~0.3 MiB) rather than carrying the archives twice.
 
-Measured on a cold module cache against a committed `go.mod`/`go.sum`:
+Sizes of the module zips (the first measurement used a cold module cache and a
+committed `go.mod`/`go.sum`):
 
 | | download |
 |---|---|
 | root module | 0.3 MiB |
-| one platform module | ~29-33 MiB |
-| **per consumer build** | **~33 MiB** |
-| all six, as one module | ~194 MiB — and over the cap, so impossible |
+| one platform module | ~22-35 MiB |
+| **per consumer build** | **~22-35 MiB** |
+| all ten, as one module | ~264 MiB zipped, ~1057 MiB extracted, and over the cap, so impossible |
 
 The one rough edge: `go get` and `go mod tidy` walk every `GOOS`/`GOARCH`, so
-the first of either in a consumer's tree fetches all six to record `go.sum`
+the first of either in a consumer's tree fetches all ten to record `go.sum`
 hashes. Ordinary builds afterwards fetch one.
 
 ### Releasing
@@ -95,7 +100,8 @@ override it locally. Step 3 is the one to get right by hand.
 ## Archives over 100 MiB are split
 
 GitHub refuses any single file larger than 100 MiB, and `libblitz.a` for the
-64-bit Linux targets is past that. Since a consumer never runs anything from
+64-bit Linux targets, the two musl targets, FreeBSD and Windows on ARM is past
+that. Since a consumer never runs anything from
 this repository, it cannot reassemble a file that was chunked — so the archive
 is divided into several *archives* instead, `libblitz0.a`, `libblitz1.a`, …,
 each holding a subset of the object files. `build-blitz.sh` does this
@@ -116,8 +122,16 @@ left-to-right pass:
 Apple's `ld64` has no `--start-group` and needs none — it resolves the whole set
 of archives together — so the macOS targets just list the pieces. Splitting uses
 `llvm-ar` rather than GNU `ar`: it writes symbol tables for ELF, Mach-O and COFF
-archives alike, so one code path covers all six targets from the Linux build
+archives alike, so one code path covers every target from the Linux build
 host.
+
+The Windows archives hold small import stubs for the system DLLs, and many of
+them share one member name. `advapi32.dll` appears 199 times in `windows-arm64`.
+Extracting by name keeps one and drops the rest, so the split extracts each
+instance with the `N` modifier of `llvm-ar` and gives it a numbered file name,
+such as `3.advapi32.dll`. A member name is only a label, because the linker finds
+an object through the symbol table, which the split rewrites. The script makes sure
+that the number of extracted files equals the number of members.
 
 `lib.go` is generated with whatever `-l` flags the split produced, so a change
 in the number of pieces cannot quietly break downstream links.
@@ -159,7 +173,7 @@ The full analysis, including what consumers should do instead
 Each archive is tens of megabytes and git keeps every historical version
 forever. A few habits help:
 
-- Rebuild and commit **all six targets together**, in one commit, when bumping
+- Rebuild and commit **all ten targets together**, in one commit, when bumping
   `blitz-c`. Partial updates multiply the stored blobs without making any
   release usable.
 - Don't commit intermediate or debugging builds. `./build-blitz.sh <target>`

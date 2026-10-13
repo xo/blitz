@@ -32,7 +32,7 @@ make check-generated
 A render needs fonts. On Linux, install `fontconfig` and one font family, such
 as `fonts-dejavu-core`, before you run the tests.
 
-If you rebuild the archives, rebuild all six targets in one commit, with
+If you rebuild the archives, rebuild all ten targets in one commit, with
 `version.txt`. The README says how, under "Rebuilding the archives".
 
 ## Agent skills

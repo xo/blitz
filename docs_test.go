@@ -223,7 +223,8 @@ func TestAnAmendmentPointsBothWays(t *testing.T) {
 // of that repository and not of this one.
 var otherRepos = map[string]bool{
 	"blitz-c": true, "cql": true, "dbimp": true, "dbmeta": true, "dbtpl": true,
-	"dburl": true, "n1ql": true, "tblfmt": true, "usql": true,
+	"dburl": true, "magic": true, "n1ql": true, "resvg": true, "tblfmt": true,
+	"usql": true,
 }
 
 // TestEveryDecisionReferenceExists checks that a bare decision number, such

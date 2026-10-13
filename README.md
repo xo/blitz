@@ -33,14 +33,39 @@ consumer never runs any script from this repository.
 The static archives are prebuilt and committed, one Go module per platform
 under `libblitz/<target>/`. `blitz.go` pulls in the right one through a
 build-tagged blank import in `link_GOOS_GOARCH.go`, so `go build` downloads
-only the archives for the platform you're building for — about 33 MiB, not the
-~190 MiB all six come to. Cross-compiling picks up the matching module
+only the archives for the platform you're building for — about 22 to 35 MiB, not
+the ~264 MiB all ten come to. Cross-compiling picks up the matching module
 automatically.
 
 One wrinkle: `go get` and `go mod tidy` consider every `GOOS`/`GOARCH`, so the
-first one you run fetches all six modules to record their `go.sum` hashes.
+first one you run fetches all ten modules to record their `go.sum` hashes.
 Builds after that, and any CI that starts from a committed `go.mod`/`go.sum`,
 fetch only the one they need.
+
+### Platforms
+
+Ten targets ship. Eight of them build with `cross`, and two build with zig.
+
+| Directory under `libblitz/` | GOOS/GOARCH | Build tag | Status |
+|---|---|---|---|
+| `linux-amd64` | linux/amd64 | none | built and tested |
+| `linux-arm64` | linux/arm64 | none | built and tested |
+| `linux-armv7` | linux/arm | none | built |
+| `macos-amd64` | darwin/amd64 | none | built |
+| `macos-arm64` | darwin/arm64 | none | built and tested |
+| `windows-amd64` | windows/amd64 | none | built and tested |
+| `linux-amd64-musl` | linux/amd64 | `musl` | built and tested on Alpine 3.20 |
+| `linux-arm64-musl` | linux/arm64 | `musl` | built and tested on Alpine 3.20 under qemu |
+| `windows-arm64` | windows/arm64 | none | built and linked, never run |
+| `freebsd-amd64` | freebsd/amd64 | none | built and linked, never run |
+
+The go command cannot select on the C library, so the two musl targets are
+opt-in. Add `-tags musl` to any `go build`, `go test` or `go run` on a musl host
+such as Alpine. Without the tag, linux/amd64 and linux/arm64 use the glibc
+archives. See "musl (Alpine)" under "Platform notes".
+
+"Built and tested" means that CI links the archive and runs the tests on a
+runner for that platform. The other rows have no CI job yet.
 
 You only need the rest of this section if you're *updating* the archives.
 
@@ -57,17 +82,33 @@ You only need the rest of this section if you're *updating* the archives.
 The first build compiles Stylo, parley and the TLS stack from source, so expect
 it to take a while.
 
-When bumping `blitz-c`, rebuild and commit **all six targets in one commit**
+When bumping `blitz-c`, rebuild and commit **all ten targets in one commit**
 along with `version.txt`. Each archive is tens of megabytes and git stores every
 version forever, so partial updates cost repository size without producing a
 usable release.
 
 ### How the cross builds work
 
-Every target goes through [`cross`](https://github.com/cross-rs/cross) with
+Eight targets go through [`cross`](https://github.com/cross-rs/cross) with
 podman — there is no native build path, so an archive can't differ depending on
 which machine produced it. `CROSS_CONTAINER_ENGINE` defaults to `podman`;
 `--engine docker` or exporting the variable overrides it.
+
+Two targets cannot go through `cross`. It has no image for any Windows ARM
+target, and the glibc in its FreeBSD image is too old to run the build scripts
+of the `libc` crate. `windows-arm64` and `freebsd-amd64` build with
+[`cargo zigbuild`](https://github.com/rust-cross/cargo-zigbuild), with `zig` as
+the C compiler and the linker. They still build on a Linux host, from the same
+source, and the `ZIGBUILD` table in `build-blitz.sh` names them. Install the
+tools once:
+
+```bash
+cargo install cargo-zigbuild
+rustup target add aarch64-pc-windows-gnullvm x86_64-unknown-freebsd
+```
+
+`zig` must be on the `PATH`. If the Rust target is missing, `build-blitz.sh`
+stops and prints the `rustup` command. It never downloads a target for you.
 
 That means builds happen on a Linux host with a container engine. macOS and
 Windows can't produce these archives, which is a further reason the results are
@@ -101,7 +142,7 @@ with it.
 ```
 blitz.go                 the package
 blitz_test.go            tests; writes PNGs to testdata/output/
-build-blitz.sh           builds libblitz.a for each target (cross + podman)
+build-blitz.sh           builds libblitz.a for each target (cross + podman, or zig)
 Cross.toml               images and target-arch deps for the cross builds
 version.txt              which blitz-c tag/rev the archives came from
 cmd/blitz-render/        example CLI
@@ -179,7 +220,9 @@ local documents.
 
 ## Fonts
 
-The renderer resolves fonts through the host system. A container with no fonts
+The renderer resolves fonts through the host system. The musl and FreeBSD
+archives load fontconfig at run time, so read "Fonts without fontconfig at link
+time" under "Platform notes" before you link one statically. A container with no fonts
 installed produces blank pages and still returns success — which is why the
 tests assert a minimum PNG size rather than just checking the error. Install
 `fontconfig` and at least one font family (`fonts-dejavu-core` is enough) in any
@@ -335,6 +378,61 @@ work around, and it is almost certainly not intended — `cross` exists to pin a
 *old* glibc for exactly this reason. Fixing it means building the Linux targets
 in an older base image and rebuilding; the floor then drops to whatever that
 image ships.
+
+A host with an older glibc cannot use these archives. A musl host such as Alpine
+can use the musl archives instead. See "musl (Alpine)".
+
+### musl (Alpine)
+
+The two musl archives are built for `x86_64-unknown-linux-musl` and
+`aarch64-unknown-linux-musl`. They are for Alpine and other musl hosts, which the
+glibc archives cannot link on. Build with the `musl` tag:
+
+```bash
+go build -tags musl ./...
+```
+
+Alpine needs these packages: `build-base`, `libunwind-dev`, `fontconfig` and a
+font such as `font-dejavu`. The archive needs `-lunwind` at link time because
+musl does not provide it.
+
+Both archives passed the whole test suite on Alpine 3.20. The amd64 run used
+`go test -tags musl` on a native container. The arm64 run used a test binary
+linked with `zig cc` and ran under qemu, so it needed only `fontconfig`,
+`font-dejavu` and `libunwind` at run time.
+
+### Fonts without fontconfig at link time
+
+The musl and FreeBSD archives do not link `-lfontconfig`. They load fontconfig
+with `dlopen` when the program starts. There is no fontconfig package for the
+target in the build environment, so the other way is not possible. The archives
+use the `fontconfig-dlopen` feature of blitz-c.
+
+This has one result that you must know. A program that links fully statically
+cannot call `dlopen`, so it finds no fonts, and it renders blank text with no
+error. A static musl test binary on a Linux host showed this: two tests that
+depend on text height failed, and the rest passed. The same tests passed when
+the program linked dynamically on Alpine. Link dynamically, and install
+fontconfig and a font on the host that runs the program.
+
+### FreeBSD
+
+`freebsd-amd64` is built for `x86_64-unknown-freebsd` with `cargo zigbuild`. It
+links into a Go test binary with `zig cc -target x86_64-freebsd`. Nobody has run
+it, because no FreeBSD machine was available. The link flags name the FreeBSD
+base libraries `execinfo`, `kvm`, `memstat`, `procstat` and `devstat`. A real
+FreeBSD host has them. Zig does not ship them, so the link test used empty
+stand-in libraries, and it showed that the archive needs no symbol from them.
+
+### Windows on ARM
+
+`windows-arm64` is built for `aarch64-pc-windows-gnullvm` with `cargo zigbuild`.
+It is not the `msvc` target, which needs Visual Studio on the build host. It
+links into a Go test binary with `zig cc -target aarch64-windows-gnu`. Nobody
+has run it, because no Windows ARM machine was available. The archive is 144 MiB
+and the build splits it in two, like the Linux archives. It holds about 2,400
+small import stubs with repeated names, such as `advapi32.dll`, and the split
+keeps each one.
 
 ## Documents
 
