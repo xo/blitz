@@ -90,7 +90,14 @@ container for the two musl targets, the `windows-11-arm` runner for
 in this repository's work. `make check-generated` already covers the generated
 files of all ten.
 
-Source: D23. Open question 2 in `PLAN.md` asks Ken.
+On the `windows-11-arm` runner, use clang from llvm-mingw as the C compiler. The
+magic repository passed its tests there with llvm-mingw 20261006, the aarch64
+ucrt zip. The native arm64 zig 0.16.0 crashed there with exit code 0xc0000005 in
+cgo, so do not use zig as the compiler on that runner. GitHub has no hosted
+FreeBSD runner.
+
+Source: D23, and a report from the magic session on 2026-10-14. Open question 2
+in `PLAN.md` asks Ken.
 
 ### Decide whether CI runs gofmt and a linter
 
