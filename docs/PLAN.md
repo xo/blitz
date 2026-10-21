@@ -36,6 +36,7 @@ it.
 | [D24](#d24-windows-arm64-and-freebsd-amd64-are-built-with-cargo-zigbuild-decided-amends-d3) | windows-arm64 and freebsd-amd64 are built with cargo zigbuild | Decided. Amends D3 |
 | [D25](#d25-the-musl-and-freebsd-archives-load-fontconfig-with-dlopen-proposed) | The musl and FreeBSD archives load fontconfig with dlopen | Proposed |
 | [D26](#d26-blitz-c-pins-blitz-e72650a-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz e72650a, and the archives are rebuilt from it | Decided |
+| [D27](#d27-blitz-c-pins-blitz-f8723f4-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz f8723f4, and the archives are rebuilt from it | Decided |
 
 ## Purpose
 
@@ -50,9 +51,9 @@ needs no other step, because the static archives are in the repository.
 This section describes the repository on 2026-10-14, after the work of D23 to
 D26.
 
-The root module is at v0.4.0. It requires ten platform modules at v0.1.3.
-Those archives came from blitz-c `3376847`, which pins dioxuslabs/blitz
-`e72650a` (D26). `version.txt` records the blitz-c revision.
+The root module is at v0.4.1. It requires ten platform modules at v0.1.4.
+Those archives came from blitz-c `7c94e55`, which pins dioxuslabs/blitz
+`f8723f4` (D27). `version.txt` records the blitz-c revision.
 
 The package has these parts:
 
@@ -84,7 +85,8 @@ Each decision gives what was decided, where the history shows it, and the
 reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
 
-D23 to D26 were written on 2026-10-14 from the work that they describe.
+D23 to D26 were written on 2026-10-14, and D27 on 2026-10-22, from the work that
+they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -397,6 +399,20 @@ then built on the host with no change to its source.
 All ten archives are rebuilt from that pin. The change is commit `3376847` in
 xo/blitz-c, and `version.txt` records it. The same commit adds the
 `fontconfig-dlopen` feature of D25.
+
+### D27. blitz-c pins blitz f8723f4, and the archives are rebuilt from it. Decided.
+
+On 2026-10-22 Ken asked again to update to the latest blitz and to publish a
+release. The pin moves from dioxuslabs/blitz `e72650a` to `f8723f4`, which is 22
+commits. The AnyRender pin moves from `870407d` to `ee6109c`, and Taffy moves
+with them. blitz-c builds with no change to its source, and `make check-tls`
+still finds no OpenSSL. The change is commit `7c94e55` in xo/blitz-c.
+
+All ten archives are rebuilt in one commit (D10). The tests pass under `-race`
+on linux-amd64, and both musl archives pass on Alpine 3.20, on amd64 and on
+arm64 under qemu. `windows-arm64` and `freebsd-amd64` still link and nobody has
+run them. The platform modules are v0.1.4 and the root is v0.4.1, because a
+rebuild with no new platform is a patch release, as in v0.1.1 and v0.1.2.
 
 ## Open questions for Ken
 
