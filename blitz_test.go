@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,6 +265,124 @@ func TestMarkdownToHTML(t *testing.T) {
 	if bytes.Contains([]byte(bare), []byte("<style>")) {
 		t.Error("empty stylesheet should omit the <style> element")
 	}
+}
+
+// A tab in a code block. Blitz draws the missing-glyph box for a tab, so the
+// markdown conversion writes the spaces that reach the next tab stop, which is
+// every 8 columns. See D32.
+func TestMarkdownTabInCodeBlockIsSpaces(t *testing.T) {
+	html, err := MarkdownToHTML("```\na\tb\n\tc\n```", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, body, _ := strings.Cut(html, "<body>")
+	if strings.Contains(body, "\t") {
+		t.Errorf("a tab is left in the body: %q", body)
+	}
+	for _, want := range []string{"a       b", "\n        c"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q: %q", want, body)
+		}
+	}
+
+	// The stylesheet does not matter: the spaces are in the HTML.
+	empty := ""
+	bare, err := MarkdownToHTML("```\n\tx\n```", &empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(bare, "\t") {
+		t.Errorf("a tab is left with no stylesheet: %q", bare)
+	}
+
+	// A tab outside a code block is left alone, because it collapses to a space.
+	para, err := MarkdownToHTML("a\tb", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(para, "a\tb") {
+		t.Errorf("a tab in a paragraph changed: %q", para)
+	}
+}
+
+func TestRenderedTabEqualsEightSpaces(t *testing.T) {
+	c := ctx(t)
+	tab, err := c.RenderMarkdown("```\n\tx\n```", "", testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	spaces, err := c.RenderMarkdown("```\n        x\n```", "", testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tab.Bounds() != spaces.Bounds() || !bytes.Equal(tab.Pix, spaces.Pix) {
+		t.Error("a tab in a code block does not render as 8 spaces. Blitz draws a box for a tab. See D32")
+	}
+}
+
+// Blitz draws the marker of an ordered list item with no space after it, so
+// "1." touches the text. The stylesheet pads the item, and that makes a gap.
+// This measures the first line of the render at scale 2. It finds the runs of
+// ink columns, and takes the first wide one, which is the "O" of "Ordered"
+// (about 22 pixels). The marker is the narrow runs before it, "1" and ".". The
+// gap between the last of them and the "O" is 3 pixels without the padding and
+// 15 with it, so the test wants 8 or more. See D32.
+func TestOrderedListMarkerHasAGap(t *testing.T) {
+	img, err := ctx(t).RenderMarkdown("1. Ordered item\n2. Ordered item", "", testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := img.Bounds()
+	ink := func(x, y int) bool { return img.RGBAAt(x, y).R < 160 }
+
+	// The first line is the rows from the first row with ink, for 28 pixels. That
+	// reaches the baseline, where the period of "1." sits.
+	top := -1
+	for y := b.Min.Y; y < b.Max.Y && top < 0; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if ink(x, y) {
+				top = y
+				break
+			}
+		}
+	}
+	if top < 0 {
+		t.Fatal("the render has no ink, so no fonts were found")
+	}
+
+	var runs [][2]int
+	start := -1
+	for x := b.Min.X; x < b.Max.X; x++ {
+		on := false
+		for y := top; y < top+28 && y < b.Max.Y; y++ {
+			if ink(x, y) {
+				on = true
+				break
+			}
+		}
+		switch {
+		case on && start < 0:
+			start = x
+		case !on && start >= 0:
+			runs = append(runs, [2]int{start, x - 1})
+			start = -1
+		}
+	}
+
+	for i, r := range runs {
+		if r[1]-r[0]+1 < 16 {
+			continue
+		}
+		if i == 0 {
+			t.Fatalf("the first run of ink is wide, so there is no marker: %v", runs[:min(4, len(runs))])
+		}
+		if gap := r[0] - runs[i-1][1] - 1; gap < 8 {
+			t.Errorf("the gap between the marker and the text is %dpx, want 8 or more. "+
+				"Blitz puts no space after the marker, and the stylesheet pads the item. See D32", gap)
+		}
+		return
+	}
+	t.Fatalf("found no wide run of ink for the first letter: %v", runs)
 }
 
 // --- error handling ---------------------------------------------------------

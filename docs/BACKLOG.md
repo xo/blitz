@@ -71,6 +71,25 @@ the AnyRender and vello revisions from the lock file of that blitz, and
 
 Source: D31.
 
+### File the two Blitz defects, and drop the markdown workarounds
+
+Nobody has filed either defect on DioxusLabs/blitz (D32). Each issue needs the
+version of blitz (`c27b4ca`) and a reproduction.
+
+1. An outside ordered list marker has no trailing space. With
+   `<ol><li>Ordered item</li></ol>` the render shows "1.Ordered item", and with
+   `<ul>` it shows a bullet and a gap. A browser leaves a gap after the marker.
+   `li::marker { content: ... }` has no effect.
+2. A tab in `white-space: pre` text draws the missing-glyph box, in
+   `<pre>a<newline><tab>b</pre>`. `tab-size` and `white-space: pre-wrap` have no
+   effect, and spaces draw correctly. The tab should advance to the next tab
+   stop, 8 columns by default.
+
+When Blitz fixes one, remove the matching workaround from `src/markdown.rs` in
+blitz-c, which is the `ol > li` rule or `expand_tabs_in_pre`, and the tests of D32.
+
+Source: D32, and the report of the iv session on 2026-11-12.
+
 ### Drop the vello patch and the reqwest hold
 
 blitz-c patches four vello crates to a development branch and stays on reqwest

@@ -41,6 +41,7 @@ it.
 | [D29](#d29-the-archives-hold-no-llvm-bitcode-and-a-test-says-so-decided-amends-d7) | The archives hold no LLVM bitcode, and a test says so | Decided. Amends D7 |
 | [D30](#d30-blitz-c-pins-blitz-c27b4ca-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz c27b4ca, and the archives are rebuilt from it | Decided |
 | [D31](#d31-blitz-c-builds-against-a-vello-development-branch-and-holds-reqwest-at-0131-decided) | blitz-c builds against a vello development branch, and holds reqwest at 0.13.1 | Decided |
+| [D32](#d32-the-markdown-output-works-around-two-blitz-defects-decided) | The markdown output works around two Blitz defects | Decided |
 
 ## Purpose
 
@@ -55,11 +56,11 @@ needs no other step, because the static archives are in the repository.
 This section describes the repository on 2026-10-14, after the work of D23 to
 D26.
 
-The last release is v0.4.2, which requires ten platform modules at v0.1.5. The
-working tree holds a rebuild from dioxuslabs/blitz `c27b4ca` (D30), and `go.mod`
-requires the modules at v0.1.6. None of the new tags exists yet. The macOS
-archives of v0.1.5 do not link with Go 1.27.4, and the rebuild fixes that
-(D29). The blitz-c change is commit `d568d67`, and `version.txt` records it.
+The root module is at v0.4.4. It requires ten platform modules at v0.1.7. Those
+archives came from blitz-c `11a084f`, which pins dioxuslabs/blitz `c27b4ca`
+(D30). `version.txt` records the blitz-c revision. The macOS archives hold no
+LLVM bitcode, so they link with Go 1.27.4 (D29). The markdown output works
+around two renderer defects (D32).
 
 The package has these parts:
 
@@ -92,7 +93,7 @@ reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
 
 D23 to D26 were written on 2026-10-14, D27 on 2026-10-22, D28 on 2026-10-28
-and D29 to D31 on 2026-11-12, from the work that they describe.
+and D29 to D32 on 2026-11-12, from the work that they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -508,6 +509,36 @@ whether an earlier blitz should be pinned, and he said yes.
 The way to avoid all three is to wait for a blitz that does not need them. The
 way to reduce them is to pin an earlier blitz commit.
 
+### D32. The markdown output works around two Blitz defects. Decided.
+
+On 2026-11-12 the iv session reported two defects that exist in v0.4.2 and v0.4.3.
+Both are in the Blitz renderer, and the generated HTML is correct. Ken asked for
+the fix to be released and tagged.
+
+An ordered list marker has no space after it, so "1." touches the text. CSS cannot
+restore the space: `li::marker` content is ignored, and `list-style-position:
+inside` adds the space but moves the whole layout. Padding on the item works, and
+it leaves the marker where it is. The built-in stylesheet of blitz-c has the rule
+`ol > li { padding-left: 0.4em }`. It does not reach a stylesheet that the caller
+supplies, and it puts the text of an ordered list about 0.4em to the right of the
+text of a bulleted list.
+
+A tab in preformatted text draws the missing-glyph box. No CSS setting helps:
+`tab-size`, `white-space: pre-wrap` and three monospace fonts all drew the box,
+and four spaces drew correctly. `to_html_document` in blitz-c now replaces each
+tab inside a `<pre>` block with the spaces that reach the next tab stop, with a
+tab stop of 8, which is the CSS default. This applies to every stylesheet and to
+the HTML that `MarkdownToHTML` returns. Tabs outside `<pre>` collapse to a space
+and are left alone. Raw HTML that a caller gives to `RenderHTML` is not changed.
+
+blitz-c has unit tests for both (commit `11a084f`). `TestRenderedTabEqualsEightSpaces`
+compares the pixels of a tab and of 8 spaces. `TestOrderedListMarkerHasAGap`
+measures the gap in a render. It was checked against the old behaviour: with the
+rule removed the gap is 3 pixels, and the test wants 8.
+
+These are workarounds. The proper fix is in Blitz, and nobody has filed either
+issue yet. The backlog holds the drafts.
+
 ## Open questions for Ken
 
 1. Does CI run gofmt again? D19 records why it does not run now, and the
@@ -534,3 +565,6 @@ way to reduce them is to pin an earlier blitz commit.
 8. Do `linux_riscv64`, `linux_ppc64le` and `linux_s390x` come? The magic and
     resvg sessions report that nobody decided them. They also report a decision
     against netbsd, solaris, 32-bit x86, android, ios and wasm.
+9. May I file the two issues on DioxusLabs/blitz? The backlog holds the
+   reproductions. Filing is public, so I have not done it.
+

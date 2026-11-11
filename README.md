@@ -202,6 +202,22 @@ GFM tables, footnotes, strikethrough and task lists are on. The built-in
 stylesheet honours `prefers-color-scheme`, so `opts.ColorScheme = blitz.Dark`
 gives a dark render with no CSS changes.
 
+The markdown conversion works around two defects of the Blitz renderer:
+
+- Blitz draws a tab in preformatted text as a hollow box. The conversion writes
+  each tab inside a `<pre>` block as the spaces that reach the next tab stop, and
+  a tab stop is 8 columns, the CSS default. This applies to every stylesheet and
+  to the HTML that `MarkdownToHTML` returns. Raw HTML that you give to
+  `RenderHTML` is not changed, so a tab in your own `<pre>` still draws the box.
+- Blitz draws the marker of an ordered list item with no space after it, so "1."
+  touches the text. The built-in stylesheet pads each item of an ordered list by
+  0.4em. A stylesheet that you pass to `RenderMarkdownStyled` does not get this
+  rule. The padding also moves the text of an ordered list about 0.4em to the
+  right of the text of a bulleted list.
+
+Both are in D32 in [docs/PLAN.md](docs/PLAN.md), and each goes when Blitz fixes
+the defect.
+
 To extend the stylesheet rather than replace it:
 
 ```go
