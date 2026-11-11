@@ -142,6 +142,18 @@ FreeBSD runner.
 Source: D23, and a report from the magic session on 2026-10-14. Open question 2
 in `PLAN.md` asks Ken.
 
+### Run the test of the highlight example in CI
+
+`_example/highlight` has its own `go.mod`, so `go test ./...` in the root does not
+run its test, and CI does not either (D34). Add a step that runs `go test ./...`
+in `_example`. It downloads the transit modules, and it builds against the working
+tree through a `replace`, so it needs the same fonts and link setup as the
+other jobs. The example knows four languages, Go, Python, JSON and Bash. The
+transit session is planning grammars for more, and the table `aliases` in
+`_example/highlight/main.go` is where each one goes.
+
+Source: D34.
+
 ### Decide whether CI runs gofmt and a linter
 
 CI runs `go vet` and not gofmt (D19), and the repository has no

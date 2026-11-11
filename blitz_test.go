@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"image"
 	"image/png"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -510,6 +512,117 @@ func TestRenderAtThePixelLimitWorks(t *testing.T) {
 			t.Errorf("%s (%dx%d): want a CodeInvalidArg error, got %v", tc.name, tc.w, tc.h, err)
 		}
 	}
+}
+
+// The hook for a syntax highlighter. See D34.
+func TestHighlightCodeBlocks(t *testing.T) {
+	md := "intro\n\n```go\nif a < b && c {\n\treturn \"x\"\n}\n```\n\n```sql\nSELECT 1\n```\n\n" +
+		"```x&y\nodd name\n```\n\n```Go\nupper\n```\n\n```rust,ignore\nattr\n```\n\n" +
+		"```\nno language\n```\n\n`inline` code\n"
+	doc, err := MarkdownToHTML(md, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var langs []string
+	h := func(lang, code string) (string, bool) {
+		langs = append(langs, lang)
+		if lang == "sql" {
+			return "", false
+		}
+		// The code is the plain text of the block, with a newline at the end and
+		// a tab already written as spaces.
+		if !strings.HasSuffix(code, "\n") {
+			t.Errorf("%s: code does not end with a newline: %q", lang, code)
+		}
+		if strings.Contains(code, "\t") || strings.Contains(code, "&lt;") || strings.Contains(code, "&amp;") {
+			t.Errorf("%s: code is not plain text: %q", lang, code)
+		}
+		return `<span class="hl">` + html.EscapeString(code) + `</span>`, true
+	}
+	out := HighlightCodeBlocks(doc, h)
+
+	// Only a block with a language reaches the Highlighter, and the language is
+	// the plain text of the info string.
+	// The name is exactly as the author wrote it: its case and its attribute stay.
+	if want := []string{"go", "sql", "x&y", "Go", "rust,ignore"}; !slices.Equal(langs, want) {
+		t.Errorf("languages = %q, want %q", langs, want)
+	}
+	for _, want := range []string{
+		`<pre><code class="language-go"><span class="hl">if a &lt; b &amp;&amp; c {`,
+		"        return &#34;x&#34;\n}\n</span></code></pre>",
+		// A block that the Highlighter declines is not changed, and neither is a
+		// block with no language, an inline code, or the document around them.
+		`<pre><code class="language-sql">SELECT 1`,
+		`<pre><code>no language`,
+		`<code>inline</code>`,
+		`<p>intro</p>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not hold %q:\n%s", want, out)
+		}
+	}
+	if !strings.Contains(out, `class="language-x&amp;y"><span class="hl">odd name`) {
+		t.Errorf("the wrapper of a block with a special language changed:\n%s", out)
+	}
+
+	// A nil Highlighter changes nothing.
+	if got := HighlightCodeBlocks(doc, nil); got != doc {
+		t.Error("a nil Highlighter changed the document")
+	}
+	// A Highlighter that declines every block changes nothing.
+	if got := HighlightCodeBlocks(doc, func(string, string) (string, bool) { return "", false }); got != doc {
+		t.Error("a Highlighter that declines every block changed the document")
+	}
+}
+
+func TestRenderMarkdownHighlighted(t *testing.T) {
+	c := ctx(t)
+	const md = "A block:\n\n```go\nfunc main() {}\n```\n"
+	red := func(lang, code string) (string, bool) {
+		return `<span style="color:#cc0000">` + html.EscapeString(code) + `</span>`, true
+	}
+	redPixels := func(img *image.RGBA) (n int) {
+		for i := 0; i+3 < len(img.Pix); i += 4 {
+			if r, g, b := img.Pix[i], img.Pix[i+1], img.Pix[i+2]; r > 150 && g < 60 && b < 60 {
+				n++
+			}
+		}
+		return n
+	}
+
+	plain, err := c.RenderMarkdown(md, "", testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	hl, err := c.RenderMarkdownHighlighted(md, "", testOptions(), red)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := redPixels(plain); n != 0 {
+		t.Fatalf("the plain render has %d red pixels, so the test says nothing", n)
+	}
+	if n := redPixels(hl); n < 50 {
+		t.Errorf("the highlighted render has %d red pixels, want the code in red", n)
+	}
+	if plain.Bounds() != hl.Bounds() {
+		t.Errorf("highlighting changed the size: %v, was %v", hl.Bounds(), plain.Bounds())
+	}
+
+	// A nil Highlighter is RenderMarkdown.
+	same, err := c.RenderMarkdownHighlighted(md, "", testOptions(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(same.Pix, plain.Pix) {
+		t.Error("a nil Highlighter does not give the render of RenderMarkdown")
+	}
+
+	data, err := c.RenderMarkdownHighlightedPNG(md, "", testOptions(), 144, red)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPNG(t, data, "highlighted")
 }
 
 // --- error handling ---------------------------------------------------------

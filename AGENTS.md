@@ -55,6 +55,11 @@ does not hold.
   `Options`, `Error` and the status codes. The cgo preamble includes
   `libblitz/blitz.h`.
 - `pdf.go` writes a PDF from a render, with no dependency.
+- `highlight.go` is the `Highlighter` hook for the fenced code blocks of a
+  markdown document. It is pure Go, and blitz depends on no highlighter (D34).
+  `_example/highlight` is its sample program, with a `go.mod` of its own that
+  requires transit. `go test ./...` in the root does not run it. Run its test in
+  `_example`.
 - `link_GOOS_GOARCH.go` is one blank import per platform, gated by a build
   constraint. `build-blitz.sh` generates each one. Do not edit them. The two
   musl targets use the names `link_linux_amd64_musl.go` and

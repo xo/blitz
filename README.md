@@ -146,6 +146,8 @@ build-blitz.sh           builds libblitz.a for each target (cross + podman, or z
 Cross.toml               images and target-arch deps for the cross builds
 version.txt              which blitz-c tag/rev the archives came from
 cmd/blitz-render/        example CLI
+highlight.go             the Highlighter hook for fenced code blocks
+_example/highlight/      sample program: the hook filled by transit (own go.mod)
 link_*.go                generated: one blank import per platform
 libblitz/                prebuilt archives, committed, one module per platform
   blitz.h
@@ -233,6 +235,52 @@ than an `Options` field.
 Relative image paths in markdown need both a `baseURL` (a directory `file://`
 URL) *and* `EnableNet = true`, since assets go through the net provider even for
 local documents.
+
+## Syntax highlighting
+
+blitz does not highlight code, and it does not depend on a highlighter. It gives
+a hook, so that any highlighter can color the fenced code blocks of a markdown
+document. A `Highlighter` gets the language of a block and its plain text, and
+it returns the HTML to put inside the `<code>` element:
+
+```go
+type Highlighter func(lang, code string) (html string, ok bool)
+
+png, err := ctx.RenderMarkdownHighlightedPNG(source, "", opts, 144, myHighlighter)
+```
+
+`lang` is the first word of the info string, so `go` for a block that opens with
+three backticks and `go`. It is exactly as the author wrote it: the case is kept
+(`Go`), and an attribute that touches the word stays (`rust,ignore`). The
+`Highlighter` lowercases the name, cuts it at a comma, a brace or a space, and
+maps it to a language with a table of its own. `code` has no HTML escapes, and it
+ends with a newline.
+A tab in it is already spaces (see above). The returned HTML goes in as it is, so
+the `Highlighter` must escape the code with `html.EscapeString`, and it colors a
+run of text with `<span style="color:#cf222e">`. Inline styles need no
+stylesheet, and the block keeps the background that the stylesheet gives it. A
+`Highlighter` returns false for a language that it does not know, and that block
+keeps its plain look. A nil `Highlighter` gives the same image as `RenderMarkdown`.
+
+The methods are `RenderMarkdownHighlighted` and `RenderMarkdownHighlightedPNG`,
+and they use the built-in stylesheet. To use a stylesheet of your own, convert
+with `MarkdownToHTML` and your stylesheet, call `HighlightCodeBlocks` on the
+result, and render it with `RenderHTML`.
+
+[`_example/highlight`](_example/highlight/main.go) is a program that fills the
+hook with [transit](https://github.com/xo/transit), a pure Go port of
+tree-sitter. It parses each block with the grammar of its language, runs the
+highlight query of the grammar, and colors each capture with a style of
+`github.com/xo/transit/styles`. The styles `github` and `github-dark` follow the
+syntax colors of GitHub. The example has its own `go.mod`, so that transit is not
+a dependency of blitz. It knows Go, Python, JSON and Bash, and it is the place to
+add more.
+
+```bash
+cd _example
+go run ./highlight -o out.png ../README.md
+go run ./highlight -dark -o out.png ../README.md
+```
 
 ## Size limit
 

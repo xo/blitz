@@ -43,6 +43,7 @@ it.
 | [D31](#d31-blitz-c-builds-against-a-vello-development-branch-and-holds-reqwest-at-0131-decided) | blitz-c builds against a vello development branch, and holds reqwest at 0.13.1 | Decided |
 | [D32](#d32-the-markdown-output-works-around-two-blitz-defects-decided) | The markdown output works around two Blitz defects | Decided |
 | [D33](#d33-a-render-over-the-pixel-limits-is-a-clear-error-decided) | A render over the pixel limits is a clear error | Decided |
+| [D34](#d34-a-markdown-render-takes-a-highlighter-hook-and-blitz-depends-on-no-highlighter-decided) | A markdown render takes a Highlighter hook, and blitz depends on no highlighter | Decided |
 
 ## Purpose
 
@@ -57,7 +58,7 @@ needs no other step, because the static archives are in the repository.
 This section describes the repository on 2026-10-14, after the work of D23 to
 D26.
 
-The root module is at v0.4.5. It requires ten platform modules at v0.1.8. Those
+The root module is at v0.5.0. It requires ten platform modules at v0.1.8. Those
 archives came from blitz-c `e60aa39`, which pins dioxuslabs/blitz `c27b4ca`
 (D30). `version.txt` records the blitz-c revision. The macOS archives hold no
 LLVM bitcode, so they link with Go 1.27.4 (D29). The markdown output works
@@ -95,7 +96,7 @@ reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
 
 D23 to D26 were written on 2026-10-14, D27 on 2026-10-22, D28 on 2026-10-28
-D29 to D33 on 2026-11-12, from the work that they describe.
+D29 to D33 on 2026-11-12 and D34 on 2026-11-12, from the work that they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -583,6 +584,46 @@ a caller would then get a cut page with no word of it. It does not render in str
 and join them either. That would draw any height, but the memory is large: a 2400
 by 72512 image is about 700 MB. A caller that needs a very long document can lower
 the scale or render it in parts.
+
+### D34. A markdown render takes a Highlighter hook, and blitz depends on no highlighter. Decided.
+
+On 2026-11-12 Ken asked whether markdown rendering has a hook for a syntax
+highlighter, so that a block that opens with ```go is colored. It had none. The
+markdown conversion already writes a fenced block as `<pre><code
+class="language-go">`, with the code HTML-escaped and its tabs written as spaces
+(D32), so a highlighter can work between `MarkdownToHTML` and `RenderHTML`. Ken
+said to use the sister project transit and not chroma, and then to add the hook.
+
+blitz gets a type and three functions, all pure Go, in `highlight.go`.
+`Highlighter` is `func(lang, code string) (html string, ok bool)`: it gets the
+language and the plain text of one block and returns the HTML for the inside of
+`<code>`, or false to leave the block plain. `HighlightCodeBlocks` rewrites the
+blocks of a converted document, so a caller with a stylesheet of its own can use
+it with `MarkdownToHTML` and `RenderHTML`. `RenderMarkdownHighlighted` and
+`RenderMarkdownHighlightedPNG` do the conversion with the built-in stylesheet, and
+render. A nil `Highlighter` gives the same image as `RenderMarkdown`.
+
+A callback keeps the rule that the root module depends on the standard library and
+its own platform modules. A field of func type on `Options` was not used, because
+it would make `Options` impossible to compare with `==`, which is a break for a
+caller that does.
+
+The sample program `_example/highlight` fills the hook with transit. It parses a
+block with the grammar of its language, runs the highlight query of the grammar,
+and colors each capture with a style of `github.com/xo/transit/styles`, as
+`_example/highlight` of transit does for usql. It is a module of its own, so
+transit is not a requirement of blitz. It knows Go, Python, JSON and Bash. Its
+`go.mod` has a `replace` of blitz to the working tree, for development.
+
+The styles `github` and `github-dark` of transit match the syntax colors of GitHub
+in Primer for keywords, strings, constants and function names. The comment grey is
+an older value, and `github-dark` adds bold and italic that GitHub does not use.
+This was checked against the tokens in primer/primitives.
+
+Tests hold the hook. `TestHighlightCodeBlocks` checks what the callback gets and
+what stays unchanged. `TestRenderMarkdownHighlighted` checks that a render has the
+color, with the same size, and that a nil `Highlighter` is `RenderMarkdown`. The
+example has a test of its own.
 
 ## Open questions for Ken
 
