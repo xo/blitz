@@ -42,6 +42,7 @@ it.
 | [D30](#d30-blitz-c-pins-blitz-c27b4ca-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz c27b4ca, and the archives are rebuilt from it | Decided |
 | [D31](#d31-blitz-c-builds-against-a-vello-development-branch-and-holds-reqwest-at-0131-decided) | blitz-c builds against a vello development branch, and holds reqwest at 0.13.1 | Decided |
 | [D32](#d32-the-markdown-output-works-around-two-blitz-defects-decided) | The markdown output works around two Blitz defects | Decided |
+| [D33](#d33-a-render-over-the-pixel-limits-is-a-clear-error-decided) | A render over the pixel limits is a clear error | Decided |
 
 ## Purpose
 
@@ -56,11 +57,12 @@ needs no other step, because the static archives are in the repository.
 This section describes the repository on 2026-10-14, after the work of D23 to
 D26.
 
-The root module is at v0.4.4. It requires ten platform modules at v0.1.7. Those
-archives came from blitz-c `11a084f`, which pins dioxuslabs/blitz `c27b4ca`
+The root module is at v0.4.5. It requires ten platform modules at v0.1.8. Those
+archives came from blitz-c `e60aa39`, which pins dioxuslabs/blitz `c27b4ca`
 (D30). `version.txt` records the blitz-c revision. The macOS archives hold no
 LLVM bitcode, so they link with Go 1.27.4 (D29). The markdown output works
-around two renderer defects (D32).
+around two renderer defects (D32), and a render over the pixel limits is an error
+that names the limit (D33).
 
 The package has these parts:
 
@@ -93,7 +95,7 @@ reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
 
 D23 to D26 were written on 2026-10-14, D27 on 2026-10-22, D28 on 2026-10-28
-and D29 to D32 on 2026-11-12, from the work that they describe.
+D29 to D33 on 2026-11-12, from the work that they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -538,6 +540,49 @@ rule removed the gap is 3 pixels, and the test wants 8.
 
 These are workarounds. The proper fix is in Blitz, and nobody has filed either
 issue yet. The backlog holds the drafts.
+
+### D33. A render over the pixel limits is a clear error. Decided.
+
+On 2026-11-12 the iv session reported that a render taller than 65535 pixel rows
+failed with "renderer produced 96000 bytes, expected 629241600 (code -6)". The
+README of usql is 36257 CSS pixels tall, and at a scale of 2 that is 72514 pixels.
+The numbers in the report were exactly the height modulo 65536.
+
+The CPU renderer takes its width and height as `u16`. `anyrender_vello_cpu` builds
+its context with `height as u16`, which is a truncating cast with no check. So the
+limit is the CPU renderer's and not a GPU texture limit. blitz-c noticed the short
+buffer after the render and reported the size mismatch, and nothing in the message
+named the cause.
+
+The limit is lower than 65535, and it differs for each direction. iv found that a
+height of 65533 or 65534 panics ("called `Option::unwrap()` on a `None` value", in
+vello_common) and that 65532 renders. That fits vello rounding the height up to
+whole tiles of 4 rows, so that 65533 rounds to 65536. I measured the width the same
+way: 65408 columns render and 65409 do not, which fits a round up to a multiple of
+128. The tile sizes are a reading of the results and not of the vello source, and
+the two limits are the measured edges. A first version of the check used 65535 for
+both, and it was corrected before any release, because a height from 65533 to 65535
+would have passed the check and then panicked.
+
+Ken chose two things: a clear error before the render, and the limits in the
+documents. blitz-c now checks the size and fails with `BLITZ_ERR_INVALID_ARG`
+(`CodeInvalidArg` in Go). The message names the size that was asked for in pixels,
+in CSS pixels and the scale, the limit of that direction, and what to lower. The
+width, and the height when it does not follow the content, are checked when the
+options are read, before a page is fetched. A height that follows the content is
+checked after layout, before the render. Each limit is inclusive. The check, its
+unit tests for the last size that renders and the first that does not, and a note in
+`blitz.h` are blitz-c commits `48ecd6f` and `e60aa39`. The Go documents of `Options`,
+`Width`, `Height`, `Scale` and `MaxHeight`, and the README, state the limits. Two Go
+tests hold them: `TestRenderOverThePixelLimitIsAClearError` and
+`TestRenderAtThePixelLimitWorks`.
+
+Ken decided that the library does not need to render everything. Two other ways
+were not taken. blitz-c does not clamp the height and return a short image, because
+a caller would then get a cut page with no word of it. It does not render in strips
+and join them either. That would draw any height, but the memory is large: a 2400
+by 72512 image is about 700 MB. A caller that needs a very long document can lower
+the scale or render it in parts.
 
 ## Open questions for Ken
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
@@ -383,6 +384,132 @@ func TestOrderedListMarkerHasAGap(t *testing.T) {
 		return
 	}
 	t.Fatalf("found no wide run of ink for the first letter: %v", runs)
+}
+
+// The CPU renderer counts the pixels of an image in 16 bits, so a render over
+// 65535 pixels in one direction used to wrap around and fail with "renderer
+// produced N bytes, expected M", and one just under it panicked. Both are now an
+// error that names the limit. See D33.
+func TestRenderOverThePixelLimitIsAClearError(t *testing.T) {
+	c := ctx(t)
+	// No margin on the body, so that the size of the content is the size asked for.
+	tall := func(h int) string {
+		return fmt.Sprintf(`<body style="margin:0"><div style="height:%dpx"></div></body>`, h)
+	}
+
+	check := func(name string, err error, want ...string) {
+		t.Helper()
+		var be *Error
+		if !errors.As(err, &be) {
+			t.Fatalf("%s: want an *Error, got %v", name, err)
+		}
+		if be.Code != CodeInvalidArg {
+			t.Errorf("%s: code %d, want %d: %v", name, be.Code, CodeInvalidArg, err)
+		}
+		for _, w := range want {
+			if !strings.Contains(be.Message, w) {
+				t.Errorf("%s: message %q does not say %q", name, be.Message, w)
+			}
+		}
+		for _, bad := range []string{"renderer produced", "panic"} {
+			if strings.Contains(be.Message, bad) {
+				t.Errorf("%s: the message is the old failure, %q: %q", name, bad, be.Message)
+			}
+		}
+	}
+
+	// Too wide: known from the options, so it fails before any layout.
+	o := testOptions()
+	o.Width = 40000
+	o.Scale = 2
+	_, err := c.RenderHTML("<p>x</p>", "", o)
+	check("wide", err, "80000 pixels wide", "at most 65408 pixels wide", "Lower width or scale")
+
+	// Too tall because the height is fixed.
+	o = testOptions()
+	o.Width = 100
+	o.Height = 40000
+	o.Scale = 2
+	o.FitContentHeight = false
+	_, err = c.RenderHTML("<p>x</p>", "", o)
+	check("fixed height", err, "80000 pixels tall", "at most 65532 pixels tall")
+
+	// Too tall because the content is: known only after layout. This is the
+	// case that iv hit with a long README at a Scale of 2.
+	o = testOptions()
+	o.Width = 100
+	o.Scale = 2
+	o.MaxHeight = 70000
+	o.FitContentHeight = true
+	_, err = c.RenderHTML(tall(36257), "", o)
+	check("content", err, "72514 pixels tall", "36257 CSS px at scale 2", "at most 65532 pixels tall", "lower max_height")
+
+	// The sizes between the real limit and 65535 are errors too, and they are
+	// not the panic that the renderer gives for them.
+	for _, h := range []int{32767, 32768} {
+		o.MaxHeight = uint32(h)
+		_, err = c.RenderHTML(tall(40000), "", o)
+		check(fmt.Sprintf("max_height %d at scale 2", h), err, "at most 65532 pixels tall")
+	}
+
+	// MaxHeight cuts a long page short, and the render is not too tall then.
+	o.MaxHeight = 32766
+	img, err := c.RenderHTML(tall(36257), "", o)
+	if err != nil {
+		t.Fatalf("a MaxHeight that fits should render: %v", err)
+	}
+	if got := img.Bounds().Dy(); got != 65532 {
+		t.Errorf("cut to MaxHeight 32766 at scale 2: height %d, want 65532", got)
+	}
+}
+
+// Each limit is inclusive: the last size that the renderer draws must render, at
+// exactly that size with no wrap, and the next one must be the clear error.
+func TestRenderAtThePixelLimitWorks(t *testing.T) {
+	c := ctx(t)
+	doc := func(w, h int) string {
+		return fmt.Sprintf(`<body style="margin:0"><div style="width:%dpx;height:%dpx;background:#ccc"></div></body>`, w, h)
+	}
+	opts := func(w, h int) Options {
+		o := testOptions()
+		o.Width = uint32(w)
+		o.Height = uint32(h)
+		o.Scale = 1
+		o.MaxHeight = uint32(h)
+		o.FitContentHeight = true
+		return o
+	}
+
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{
+		{"the tallest", 8, 65532},
+		{"the widest", 65408, 8},
+	} {
+		img, err := c.RenderHTML(doc(tc.w, tc.h), "", opts(tc.w, tc.h))
+		if err != nil {
+			t.Errorf("%s (%dx%d) should render: %v", tc.name, tc.w, tc.h, err)
+			continue
+		}
+		if b := img.Bounds(); b.Dx() != tc.w || b.Dy() != tc.h {
+			t.Errorf("%s: size %dx%d, want %dx%d", tc.name, b.Dx(), b.Dy(), tc.w, tc.h)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		w, h int
+	}{
+		{"one row too tall", 8, 65533},
+		{"one column too wide", 65409, 8},
+	} {
+		_, err := c.RenderHTML(doc(tc.w, tc.h), "", opts(tc.w, tc.h))
+		var be *Error
+		if !errors.As(err, &be) || be.Code != CodeInvalidArg {
+			t.Errorf("%s (%dx%d): want a CodeInvalidArg error, got %v", tc.name, tc.w, tc.h, err)
+		}
+	}
 }
 
 // --- error handling ---------------------------------------------------------

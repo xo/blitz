@@ -234,6 +234,30 @@ Relative image paths in markdown need both a `baseURL` (a directory `file://`
 URL) *and* `EnableNet = true`, since assets go through the net provider even for
 local documents.
 
+## Size limit
+
+A render can be at most 65408 pixels wide and 65532 pixels tall. The CPU renderer
+counts pixels in 16 bits and rounds the size up to whole tiles, and it panics if
+the rounded size passes 65535. So these limits are a little below 65535, and they
+are not a GPU texture limit. The width in pixels is `Width` times `Scale`, and the
+height is the height of the document times `Scale`, cut at `MaxHeight`. A render
+over a limit fails with an `*Error` of code `CodeInvalidArg`:
+
+```
+blitz: render_html: the render would be 72514 pixels tall (36257 CSS px at scale 2),
+and the renderer draws at most 65532 pixels tall. Lower scale, or lower max_height
+to cut the page short.
+```
+
+Before v0.4.5, a height over 65535 wrapped around modulo 65536 and failed with
+"renderer produced N bytes, expected M", and a height of 65533 or more up to 65535
+panicked. Neither names the limit.
+
+To fit a long document, lower `Scale`, or lower `MaxHeight` to cut the page short.
+A document of 36000 CSS pixels fits at a `Scale` of 1.8 and does not fit at 2. To
+draw a very long document, render it in parts. Each limit is inclusive: 65532
+pixels tall and 65408 pixels wide render.
+
 ## Fonts
 
 The renderer resolves fonts through the host system. The musl and FreeBSD

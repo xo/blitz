@@ -81,16 +81,33 @@ const (
 
 // Options controls a render. The zero value is not meaningful — start from
 // DefaultOptions and adjust.
+//
+// A render can be at most 65408 pixels wide and 65532 pixels tall. The CPU
+// renderer counts pixels in 16 bits and rounds the size up to whole tiles, and
+// it panics if the rounded size passes 65535. The width is Width times Scale, and
+// the height is the final height of the document times Scale, so MaxHeight times
+// Scale is the most that a tall document can ask for. A render over a limit fails
+// with an *Error of code CodeInvalidArg, and the message says which way and by how
+// much. To fit a long document, lower Scale, or lower MaxHeight to cut it short.
+// The limits are the renderer's and not a GPU texture limit, and each is
+// inclusive.
 type Options struct {
-	// Width of the viewport in CSS pixels.
+	// Width of the viewport in CSS pixels. Width times Scale must be at most
+	// 65408.
 	Width uint32
 	// Minimum height of the viewport in CSS pixels. The render grows past this
-	// to fit the document unless FitContentHeight is false.
+	// to fit the document unless FitContentHeight is false. With
+	// FitContentHeight false, Height times Scale must be at most 65532.
 	Height uint32
 	// Device pixel ratio. 2 gives a "retina" render at twice the pixel
-	// dimensions.
+	// dimensions. It multiplies the size in CSS pixels, so a larger Scale lowers
+	// the tallest document that fits. A 36000 pixel document fits at a Scale of
+	// 1.8 and not at 2.
 	Scale float32
-	// Upper bound on the rendered height in CSS pixels.
+	// Upper bound on the rendered height in CSS pixels. The height in pixels is
+	// MaxHeight times Scale at most, and that must not be over 65532. For
+	// example, 32766 is the largest value at a Scale of 2. A render that would
+	// be taller than the limit fails, and it is not cut to fit.
 	MaxHeight uint32
 	// Light or Dark.
 	ColorScheme ColorScheme
