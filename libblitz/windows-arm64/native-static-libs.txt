@@ -1,1 +1,1 @@
--lbcrypt -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lunwind
+-lbcrypt -lwindows.0.53.0 -lkernel32 -lntdll -luserenv -lws2_32 -ldbghelp -lunwind

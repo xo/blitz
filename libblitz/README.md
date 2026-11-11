@@ -143,12 +143,27 @@ that a cgo link never uses:
 
 - `.llvmbc` / `.llvmcmd` — LLVM bitcode. Cargo builds this crate's own
   dependencies with `-Cembed-bitcode=no`, but `std`, `core` and `alloc` come
-  out of rustup's precompiled rlibs, which carry it.
+  out of rustup's precompiled rlibs, which carry it. On macOS the same bitcode
+  lives in the sections `__LLVM,__bitcode` and `__LLVM,__cmdline`, and the
+  script removes those too.
 - debug info — `std` ships with it and the release profile's `strip = "none"`
   keeps it.
 
 Worth about 13% on linux-amd64 (129.9 → 112.2 MiB). Symbols are left alone:
 `--strip-debug`, never `--strip-unneeded`.
+
+This step is not only about size. Go 1.27.4 reads every archive that a `#cgo
+LDFLAGS` line names, and it refuses the build with "disallowed LTO section" if a
+member holds bitcode or GCC LTO data. The v0.1.5 macOS archives held bitcode, so
+they did not link with that Go. `TestArchivesHaveNoLTOSections` repeats the check
+on every committed archive with the standard library, so a Go older than 1.27.4
+finds the fault too.
+
+`llvm-objcopy` refuses a whole archive when one member is a kind of object that
+it cannot read, and then it changes nothing. `windows-arm64` is such an archive,
+and its first slimming left 254 bitcode sections in place with no error. When
+that happens the script extracts the members, slims each object on its own, and
+puts them back. See D29 in `docs/PLAN.md`.
 
 This is *not* the same as building blitz-c's `production` profile. That sets
 `lto = true`, which forces `embed-bitcode` back on, and because rustc defers LTO

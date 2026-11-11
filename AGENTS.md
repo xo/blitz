@@ -102,6 +102,11 @@ The Makefile wraps the same commands:
 - `make modules` regenerates the Go files of the platform modules. It needs no
   container.
 
+`TestArchivesHaveNoLTOSections` reads every committed archive and fails on LLVM
+bitcode or GCC LTO data in any member. Go 1.27.4 refuses to link such an archive
+(D29). If it fails after a rebuild, fix `slim_archive` in `build-blitz.sh`, and
+do not commit the archive.
+
 The repository has no `.golangci.yml`, and CI does not run golangci-lint.
 
 A render needs fonts. On Linux, install `fontconfig` and one font family, such

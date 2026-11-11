@@ -292,6 +292,78 @@ fetch_source() {
 
 file_size() { wc -c < "$1" | tr -d '[:space:]'; }
 
+# What slim_archive removes from every object. The first two names are the ELF
+# and COFF sections. __LLVM,__bitcode and __LLVM,__cmdline are the Mach-O ones,
+# which carry the same bitcode in a segment of their own. Go 1.27.4 refuses to
+# link an archive that holds any of these and says "disallowed LTO section", so
+# leaving one in is a broken release (D29). TestArchivesHaveNoLTOSections looks
+# for them in every committed archive.
+SLIM_FLAGS="--remove-section=.llvmbc --remove-section=.llvmcmd --remove-section=__LLVM,__bitcode --remove-section=__LLVM,__cmdline --strip-debug"
+
+# Extracts every member of the archive $1 into the directory $2, one file each,
+# and writes the file names to $3 in the order of the archive.
+#
+# Extraction flattens every member into one directory, so two members sharing a
+# name overwrite each other and silently drop objects. The Windows archives have
+# such names: they carry the import stubs of the system DLLs, and advapi32.dll
+# alone appears 199 times in windows-arm64. llvm-ar's N modifier extracts the
+# nth instance of a name, so each one comes out as <n>.<name>. A member name is
+# only a label, because the linker finds an object through the symbol table that
+# llvm-ar qcs rewrites when the members go back in.
+extract_members() {
+    local archive="$1" dir="$2" list="$3" name count n idx
+    local -A total=() seen=()
+
+    ( cd "$dir" && llvm-ar x "$archive" )
+
+    while read -r name count; do
+        [[ -n "$name" ]] || continue
+        total[$name]="$count"
+        rm -f "$dir/$name"
+        for (( n = 1; n <= count; n++ )); do
+            ( cd "$dir" && llvm-ar xN "$n" "$archive" "$name" && mv "$name" "$n.$name" )
+        done
+    done < <(llvm-ar t "$archive" | sort | uniq -c | awk '$1 > 1 { print $2, $1 }')
+
+    : > "$list"
+    while read -r name; do
+        if [[ -n "${total[$name]:-}" ]]; then
+            idx=$(( ${seen[$name]:-0} + 1 ))
+            seen[$name]="$idx"
+            printf '%s\n' "$idx.$name" >> "$list"
+        else
+            printf '%s\n' "$name" >> "$list"
+        fi
+    done < <(llvm-ar t "$archive")
+
+    # Every member has to be a file of its own now, or one was lost.
+    if [[ "$(find "$dir" -maxdepth 1 -type f | wc -l)" -ne "$(wc -l < "$list")" ]]; then
+        die "$archive: the members extracted do not match the members listed"
+    fi
+}
+
+# Slims an archive one object at a time. llvm-objcopy refuses a whole archive
+# when one member is a kind of object it cannot read, as it does for
+# windows-arm64 ("unsupported object file format"), and then it changes nothing.
+# On its own, each object is fine, and the one it cannot read is left alone.
+slim_archive_by_member() {
+    local archive work list
+    archive="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+    work="$(mktemp -d)"
+    list="$(mktemp)"
+
+    extract_members "$archive" "$work" "$list"
+
+    export SLIM_FLAGS
+    ( cd "$work" && xargs -a "$list" -P "$(nproc)" -I{} \
+        sh -c 'llvm-objcopy $SLIM_FLAGS "$1" >/dev/null 2>&1 || true' _ {} )
+
+    rm -f "$archive"
+    ( cd "$work" && xargs -a "$list" llvm-ar qcs "$archive" )
+
+    rm -rf "$work" "$list"
+}
+
 # Drops what the consumer's link will never use from $1/libblitz.a, in place.
 #
 # Two things ride along in a rustc staticlib and neither survives contact with
@@ -315,7 +387,7 @@ file_size() { wc -c < "$1" | tr -d '[:space:]'; }
 # Symbols are left alone — --strip-debug, never --strip-unneeded. The archive
 # is nothing but symbols as far as the linker is concerned.
 slim_archive() {
-    local archive="$1" before after members bad attempts
+    local archive="$1" before after members bad attempts out
 
     command -v llvm-objcopy >/dev/null 2>&1 || {
         warn "llvm-objcopy not found; shipping $archive unslimmed"
@@ -340,14 +412,18 @@ slim_archive() {
     # giving up on the whole archive.
     attempts=0
     while (( attempts < 8 )); do
-        # `|| true` because a refused member is the expected path here, and
-        # pipefail would otherwise make set -e kill the script mid-slim.
-        bad="$(llvm-objcopy --remove-section=.llvmbc --remove-section=.llvmcmd \
-                   --strip-debug "$archive" 2>&1 \
-               | sed -n "s/.*'[^']*(\(.*\))': The file was not recognized.*/\1/p" \
-               | head -1 || true)"
+        # `|| true` because a refused archive is an expected path here, and
+        # set -e would otherwise stop the script mid-slim.
+        out="$(llvm-objcopy $SLIM_FLAGS "$archive" 2>&1 || true)"
+        bad="$(sed -n "s/.*'[^']*(\(.*\))': The file was not recognized.*/\1/p" <<< "$out" | head -1)"
 
         if [[ -z "$bad" ]]; then
+            # Any other error means that nothing was changed. Say so, because
+            # the size does not, and slim the objects one at a time.
+            if grep -q 'error:' <<< "$out"; then
+                warn "$(basename "$archive"): llvm-objcopy refused the archive ($(head -1 <<< "$out")), slimming member by member"
+                slim_archive_by_member "$archive"
+            fi
             break
         fi
 
@@ -374,7 +450,7 @@ slim_archive() {
 # option. See the #cgo directives in blitz.go.
 SPLIT_PARTS=0
 split_archive() {
-    local dest="$1" archive work parts i
+    local dest="$1" archive work list parts i
     dest="$(cd "$dest" && pwd)"
     archive="$dest/libblitz.a"
 
@@ -385,29 +461,9 @@ split_archive() {
         || die "llvm-ar is required to split archives over $((MAX_ARCHIVE_BYTES / 1024 / 1024)) MiB (install llvm)"
 
     work="$(mktemp -d)"
-    ( cd "$work" && llvm-ar x "$archive" )
-
-    # Extraction flattens every member into one directory, so two members
-    # sharing a name overwrite each other and silently drop objects. The
-    # Windows archives have such names: they carry the import stubs of the
-    # system DLLs, and advapi32.dll alone appears 199 times in windows-arm64.
-    # llvm-ar's N modifier extracts the nth instance of a name, so each one
-    # comes out as <n>.<name>. A member name is only a label, because the
-    # linker finds an object through the symbol table that qcs rewrites below.
-    local dups name count n
-    dups="$(llvm-ar t "$archive" | sort | uniq -c | awk '$1 > 1 { print $2, $1 }')"
-    while read -r name count; do
-        [[ -n "$name" ]] || continue
-        rm -f "$work/$name"
-        for (( n = 1; n <= count; n++ )); do
-            ( cd "$work" && llvm-ar xN "$n" "$archive" "$name" && mv "$name" "$n.$name" )
-        done
-    done <<< "$dups"
-
-    # Every member has to be a file of its own now, or one was lost.
-    if [[ "$(find "$work" -maxdepth 1 -type f | wc -l)" -ne "$(llvm-ar t "$archive" | wc -l)" ]]; then
-        die "$archive: the members extracted do not match the members listed"
-    fi
+    list="$(mktemp)"
+    extract_members "$archive" "$work" "$list"
+    rm -f "$list"
 
     # The plan lives OUTSIDE $work. Writing it inside raced with the `find`
     # below: a pipeline starts every stage at once, so the shell created the

@@ -50,14 +50,34 @@ those flags.
 
 Source: D24.
 
-### Find out why slimming does nothing for windows-arm64
+### Keep llvm-objcopy from failing silently
 
-`slim_archive` removes the LLVM bitcode and the debug information. It saved 13%
-on linux-amd64 and left windows-arm64 at 134 MiB, the same size as before. Check
-whether the archive has either one, or whether `llvm-objcopy` skips the COFF
-members. If the archive is under 100 MiB after that, it needs no split.
+`slim_archive` now slims member by member when `llvm-objcopy` refuses an archive.
+It still prints "slimmed" for any other outcome, and it trusts the test to find a
+section that is left. Make the script scan the archive for the sections of D29
+and stop when one is left, so that a bad archive does not reach the test.
 
-Source: the build of `windows-arm64` on 2026-10-14.
+Source: D29.
+
+### Teach update-pins.sh in blitz-c about the git AnyRender source
+
+`scripts/update-pins.sh` in blitz-c rewrites `rev = "..."` lines and assumes that
+blitz uses AnyRender from crates.io, with a `[patch.crates-io]` entry. Since blitz
+`c27b4ca` the source is the `main` branch of the git repository, and the commit
+is pinned in `Cargo.lock` (D31). The script also needs the `vello` revision from
+the lock file of blitz. Until it does, an update is a manual job: pin blitz, read
+the AnyRender and vello revisions from the lock file of that blitz, and
+`cargo update -p anyrender --precise <commit>`.
+
+Source: D31.
+
+### Drop the vello patch and the reqwest hold
+
+blitz-c patches four vello crates to a development branch and stays on reqwest
+0.13.1 (D31). Remove the patch when blitz stops patching glifo. Move reqwest when
+blitz-c has a plan for its root certificates.
+
+Source: D31.
 
 ## Releases
 
@@ -79,6 +99,10 @@ Source: `8a5767d`, and "Releasing" in `libblitz/README.md` (D18).
 `go.mod` says `go 1.27` (D17). The go command downloads the newer toolchain on
 its own, so CI passes, but the version in the workflow is not the version
 that runs. `actions/setup-go` can read `go-version-file: go.mod` instead.
+
+This hid the fault of D29. CI links the macOS archive on `macos-latest`, and
+Go 1.27.4 refused it for every consumer on that Go while CI passed. CI needs a
+job on the newest Go, as well as the oldest that `go.mod` allows.
 
 Source: found in the setup of D22. Open question 6 in `PLAN.md` asks Ken.
 

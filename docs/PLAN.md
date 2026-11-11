@@ -16,7 +16,7 @@ it.
 | [D4](#d4-blitzgo-names-the-archives-and-the-link-flags-of-each-platform-by-hand-amended-by-d5) | blitz.go names the archives and the link flags of each platform by hand | Amended by D5 |
 | [D5](#d5-each-platform-is-its-own-go-module-and-build-blitzsh-generates-its-link-flags-decided-amends-d4) | Each platform is its own Go module, and build-blitz.sh generates its link flags | Decided. Amends D4 |
 | [D6](#d6-an-archive-over-100-mib-is-split-into-archives-that-link-as-a-group-decided) | An archive over 100 MiB is split into archives that link as a group | Decided |
-| [D7](#d7-an-archive-uses-the-release-profile-and-loses-its-debug-information-but-not-its-symbols-decided) | An archive uses the release profile, and loses its debug information but not its symbols | Decided |
+| [D7](#d7-an-archive-uses-the-release-profile-and-loses-its-debug-information-but-not-its-symbols-decided-amended-by-d29) | An archive uses the release profile, and loses its debug information but not its symbols | Decided. Amended by D29 |
 | [D8](#d8-the-windows-archive-is-built-for-x86_64-pc-windows-gnu-decided) | The Windows archive is built for x86_64-pc-windows-gnu | Decided |
 | [D9](#d9-the-windows-archive-keeps-its-symbols-external-decided) | The Windows archive keeps its symbols external | Decided |
 | [D10](#d10-versiontxt-names-the-blitz-c-revision-and-all-six-targets-are-rebuilt-in-one-commit-decided) | version.txt names the blitz-c revision, and all six targets are rebuilt in one commit | Decided |
@@ -38,6 +38,9 @@ it.
 | [D26](#d26-blitz-c-pins-blitz-e72650a-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz e72650a, and the archives are rebuilt from it | Decided |
 | [D27](#d27-blitz-c-pins-blitz-f8723f4-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz f8723f4, and the archives are rebuilt from it | Decided |
 | [D28](#d28-blitz-c-pins-blitz-fe33b77-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz fe33b77, and the archives are rebuilt from it | Decided |
+| [D29](#d29-the-archives-hold-no-llvm-bitcode-and-a-test-says-so-decided-amends-d7) | The archives hold no LLVM bitcode, and a test says so | Decided. Amends D7 |
+| [D30](#d30-blitz-c-pins-blitz-c27b4ca-and-the-archives-are-rebuilt-from-it-decided) | blitz-c pins blitz c27b4ca, and the archives are rebuilt from it | Decided |
+| [D31](#d31-blitz-c-builds-against-a-vello-development-branch-and-holds-reqwest-at-0131-decided) | blitz-c builds against a vello development branch, and holds reqwest at 0.13.1 | Decided |
 
 ## Purpose
 
@@ -52,9 +55,11 @@ needs no other step, because the static archives are in the repository.
 This section describes the repository on 2026-10-14, after the work of D23 to
 D26.
 
-The root module is at v0.4.2. It requires ten platform modules at v0.1.5.
-Those archives came from blitz-c `d818ea4`, which pins dioxuslabs/blitz
-`fe33b77` (D28). `version.txt` records the blitz-c revision.
+The last release is v0.4.2, which requires ten platform modules at v0.1.5. The
+working tree holds a rebuild from dioxuslabs/blitz `c27b4ca` (D30), and `go.mod`
+requires the modules at v0.1.6. None of the new tags exists yet. The macOS
+archives of v0.1.5 do not link with Go 1.27.4, and the rebuild fixes that
+(D29). The blitz-c change is commit `d568d67`, and `version.txt` records it.
 
 The package has these parts:
 
@@ -86,8 +91,8 @@ Each decision gives what was decided, where the history shows it, and the
 reason. The reason comes from a commit message, a code comment or a README. If
 none of these gives a reason, the decision says "Reason not recorded".
 
-D23 to D26 were written on 2026-10-14, D27 on 2026-10-22 and D28 on 2026-10-28,
-from the work that they describe.
+D23 to D26 were written on 2026-10-14, D27 on 2026-10-22, D28 on 2026-10-28
+and D29 to D31 on 2026-11-12, from the work that they describe.
 
 D1 to D21 were written on 2026-09-27 from the history, from `af2dcb8`
 (2026-09-11) to `8a5767d` (2026-09-26). Ken made every commit in that range. A
@@ -161,7 +166,7 @@ pieces refer to each other, so GNU ld links them inside `--start-group` and
 `--end-group`. Apple ld64 needs no group. The split uses `llvm-ar`, which
 writes a symbol table for ELF, Mach-O and COFF alike.
 
-### D7. An archive uses the release profile, and loses its debug information but not its symbols. Decided.
+### D7. An archive uses the release profile, and loses its debug information but not its symbols. Decided. Amended by D29.
 
 `build-blitz.sh` removes the LLVM bitcode and the debug information from each
 archive with `llvm-objcopy --strip-debug`. That saves about 13% on linux-amd64.
@@ -429,6 +434,79 @@ tests pass under `-race` on linux-amd64, and both musl archives pass on Alpine
 and nobody has run them. The linux-armv7 archive is 98.17 MiB, which is 1.83 MiB
 under the file limit of GitHub. The platform modules are v0.1.5 and the root is
 v0.4.2, a patch release, as in D27.
+
+### D29. The archives hold no LLVM bitcode, and a test says so. Decided. Amends D7.
+
+On 2026-11-12 the iv session reported that Go 1.27.4 refuses to link the macOS
+archives of libblitz v0.1.5. Go 1.27.4 added a check in `cmd/go`. For every
+archive that a `#cgo LDFLAGS` line names, it reads each member, and it refuses a
+Mach-O segment called `__LLVM` or `__GNU_LTO` and any section in one. For ELF
+and COFF it refuses `.llvmbc`, `.llvmcmd`, `.llvm.lto*` and `.gnu.lto_*`. No
+setting turns it off. The error says "disallowed LTO section". Go 1.27.3 did not
+read the members, and neither did the Go that built the earlier releases here,
+so nothing in this repository saw it. The Linux and musl archives were fine.
+Ken said that iv's issues need fixing.
+
+D7 removed `.llvmbc` and `.llvmcmd` and so removed the ELF and COFF bitcode. It
+did not remove the Mach-O names, `__LLVM,__bitcode` and `__LLVM,__cmdline`, so
+`macos-amd64` held 254 members with bitcode and `macos-arm64` held 246. There
+was a second fault that nobody reported. `llvm-objcopy` refuses a whole archive
+when one member is a kind of object that it cannot read, and `windows-arm64` is
+such an archive ("unsupported object file format"). The script handled only a
+different message, so it did nothing and printed "slimmed" anyway. `windows-arm64`
+v0.1.5 also held 254 members with `.llvmbc`.
+
+The fix has three parts. `slim_archive` removes the two Mach-O sections too. When
+`llvm-objcopy` refuses an archive, `slim_archive_by_member` extracts the members,
+slims each object on its own, and puts them back, with the same extraction that
+the splitter uses (`extract_members`). And `TestArchivesHaveNoLTOSections` reads
+every member of every committed archive with the standard library and repeats
+the check of Go 1.27.4, so a Go that is older still finds the fault. The macOS
+archives are 9 MiB smaller, and `windows-arm64` is 10 MiB smaller.
+
+The fix was checked with a real Go 1.27.4 toolchain, which Ken allowed to be
+downloaded. A `go build` for darwin/arm64 of the published v0.4.2 fails with
+"disallowed LTO section __LLVM,__bitcode", as iv reported. The same build of the
+rebuilt archives passes, and so does a build for each of the ten targets.
+
+### D30. blitz-c pins blitz c27b4ca, and the archives are rebuilt from it. Decided.
+
+On 2026-11-12 Ken asked to update to the latest upstream blitz. The pin moves
+from dioxuslabs/blitz `fe33b77` to `c27b4ca`, which is 100 commits. blitz-c
+built on the host after the changes of D31. The tests pass under `-race` on
+linux-amd64, and both musl archives pass on Alpine 3.20, on amd64 and on arm64
+under qemu. `windows-arm64` and `freebsd-amd64` link, and nobody has run them.
+The archives are rebuilt in one commit (D10). The platform modules are v0.1.6
+and the root is v0.4.3, because D29 fixes a fault in v0.1.5.
+
+### D31. blitz-c builds against a vello development branch, and holds reqwest at 0.13.1. Decided.
+
+The update of D30 did not build with the usual steps, and three things changed
+in blitz-c. On 2026-11-12 Ken was asked whether these three are acceptable or
+whether an earlier blitz should be pinned, and he said yes.
+
+1. **AnyRender.** Upstream blitz declares `anyrender` as a git dependency on the
+   `main` branch, and it was a crates.io dependency before. blitz-c now declares
+   the same git source. A different source puts two copies of the crate in the
+   graph, and `PaintScene` stops matching. Cargo does not allow a patch that
+   points at the same git source, so the commit `3e7fc16` is pinned in
+   `Cargo.lock`, not in `Cargo.toml`. It is the one in the lock file of blitz
+   `c27b4ca`. `scripts/update-pins.sh` in blitz-c does not know about this
+   layout yet.
+2. **vello.** Upstream patches `glifo`, `vello_common`, `vello_cpu` and
+   `vello_gpu` to the branch `devin/glifo-0.4.0-embolden-2049` of
+   DioxusLabs/vello. blitz-c patches the same four crates to the commit
+   `be500db` of that branch, the one in the lock file of blitz. The archives
+   therefore carry code from a development branch, until glifo 0.4.0 is
+   released.
+3. **reqwest.** The lock file of blitz has reqwest 0.13.5, which has no
+   `webpki-roots` feature. blitz-c uses that feature for a bundled root store,
+   so that TLS works in a container with no CA certificates. blitz-c stays at
+   0.13.1, where the feature exists. The platform store of 0.13.5 would change
+   that behaviour.
+
+The way to avoid all three is to wait for a blitz that does not need them. The
+way to reduce them is to pin an earlier blitz commit.
 
 ## Open questions for Ken
 
