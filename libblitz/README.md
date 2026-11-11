@@ -69,9 +69,9 @@ committed `go.mod`/`go.sum`):
 | | download |
 |---|---|
 | root module | 0.3 MiB |
-| one platform module | ~22-35 MiB |
-| **per consumer build** | **~22-35 MiB** |
-| all ten, as one module | ~264 MiB zipped, ~1057 MiB extracted, and over the cap, so impossible |
+| one platform module | ~23-29 MiB |
+| **per consumer build** | **~23-29 MiB** |
+| all ten, as one module | ~253 MiB zipped, ~1057 MiB extracted, and over the cap, so impossible |
 
 The one rough edge: `go get` and `go mod tidy` walk every `GOOS`/`GOARCH`, so
 the first of either in a consumer's tree fetches all ten to record `go.sum`

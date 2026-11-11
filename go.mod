@@ -7,7 +7,7 @@ go 1.27
 // them pinned for every platform, but only the one matching GOOS/GOARCH is ever
 // downloaded: the imports live in build-tagged link_*.go files, and the go
 // command fetches a module's zip only when a package it provides is actually in
-// the build. A linux/amd64 build pulls ~33 MiB, not the ~264 MiB all ten come
+// the build. A linux/amd64 build pulls ~33 MiB, not the ~253 MiB all ten come
 // to.
 //
 // Splitting them out is not optional. The archives total ~1057 MiB, and the go

@@ -33,8 +33,8 @@ consumer never runs any script from this repository.
 The static archives are prebuilt and committed, one Go module per platform
 under `libblitz/<target>/`. `blitz.go` pulls in the right one through a
 build-tagged blank import in `link_GOOS_GOARCH.go`, so `go build` downloads
-only the archives for the platform you're building for — about 22 to 35 MiB, not
-the ~264 MiB all ten come to. Cross-compiling picks up the matching module
+only the archives for the platform you're building for — about 23 to 29 MiB, not
+the ~253 MiB all ten come to. Cross-compiling picks up the matching module
 automatically.
 
 One wrinkle: `go get` and `go mod tidy` consider every `GOOS`/`GOARCH`, so the
